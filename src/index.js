@@ -65,3 +65,4 @@ export default {
     return new Response("ErffanHub Toolbox", { status: 200 });
   },
 };
+// build trigger: 2026-01-01
