@@ -1,0 +1,29 @@
+{
+  "categories": [
+    { "id": "dev", "name": "Dev Tools", "emoji": "🛠️" },
+    { "id": "text", "name": "Text Tools", "emoji": "📝" }
+  ],
+  "tools": [
+    {
+      "id": "json-format",
+      "name": "JSON Formatter",
+      "description": "Format and validate JSON",
+      "url": "https://jsonformatter.org",
+      "category": "dev"
+    },
+    {
+      "id": "base64",
+      "name": "Base64 Encoder",
+      "description": "Encode and decode Base64",
+      "url": "https://www.base64encode.org",
+      "category": "dev"
+    },
+    {
+      "id": "char-count",
+      "name": "Word Counter",
+      "description": "Count characters and words",
+      "url": "https://wordcounter.net",
+      "category": "text"
+    }
+  ]
+}
