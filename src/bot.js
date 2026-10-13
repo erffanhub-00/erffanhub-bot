@@ -1,15 +1,17 @@
 import {
   buildMainMenu,
   buildCategoryMenu,
+  buildAboutMenu,
+  buildReplyKeyboard,
   getMainMenuText,
   getCategoryText,
+  getLinksText,
 } from "./menu.js";
+
+import { owner, getAboutText, getHelpText } from "./about.js";
 
 /**
  * Send a request to the Telegram Bot API and inspect the JSON body.
- * Telegram may return HTTP 200 with { ok: false, description: "..." },
- * so both the HTTP status and the `ok` field are checked.
- * Never logs the payload to avoid leaking the token.
  * @param {string} method
  * @param {object} payload
  * @param {object} env
@@ -80,8 +82,37 @@ export async function handleUpdate(update, env) {
 }
 
 /**
- * Handle text messages (commands).
- * Unauthorized users get no reply in group chats to avoid noise.
+ * Send the main menu with the persistent reply keyboard attached.
+ * @param {number} chatId
+ * @param {object} env
+ */
+async function sendMainMenu(chatId, env) {
+  await callTelegram(
+    "sendMessage",
+    {
+      chat_id: chatId,
+      text: getMainMenuText(),
+      parse_mode: "Markdown",
+      reply_markup: buildReplyKeyboard(),
+    },
+    env
+  );
+
+  // Send the inline menu as a second message so both keyboards are visible.
+  await callTelegram(
+    "sendMessage",
+    {
+      chat_id: chatId,
+      text: "Choose a category or use the buttons below:",
+      parse_mode: "Markdown",
+      reply_markup: buildMainMenu(),
+    },
+    env
+  );
+}
+
+/**
+ * Handle text messages (commands and reply keyboard button presses).
  * @param {object} message
  * @param {object} env
  */
@@ -92,7 +123,6 @@ async function handleMessage(message, env) {
   const text = message.text.trim();
 
   if (!isOwner(userId, env)) {
-    // In groups, stay silent for unauthorized users.
     if (chatType === "private") {
       await callTelegram(
         "sendMessage",
@@ -103,14 +133,48 @@ async function handleMessage(message, env) {
     return;
   }
 
-  if (text === "/start" || text === "/help") {
+  // Commands and reply keyboard buttons.
+  if (text === "/start" || text === "📦 Menu") {
+    await sendMainMenu(chatId, env);
+    return;
+  }
+
+  if (text === "/help" || text === "📖 Help") {
     await callTelegram(
       "sendMessage",
       {
         chat_id: chatId,
-        text: getMainMenuText(),
+        text: getHelpText(),
         parse_mode: "Markdown",
-        reply_markup: buildMainMenu(),
+        reply_markup: buildReplyKeyboard(),
+      },
+      env
+    );
+    return;
+  }
+
+  if (text === "/about" || text === "👤 About") {
+    await callTelegram(
+      "sendMessage",
+      {
+        chat_id: chatId,
+        text: getAboutText(),
+        parse_mode: "Markdown",
+        reply_markup: buildAboutMenu(owner.links),
+      },
+      env
+    );
+    return;
+  }
+
+  if (text === "🔗 Links") {
+    await callTelegram(
+      "sendMessage",
+      {
+        chat_id: chatId,
+        text: getLinksText(),
+        parse_mode: "Markdown",
+        reply_markup: buildAboutMenu(owner.links),
       },
       env
     );
@@ -119,7 +183,11 @@ async function handleMessage(message, env) {
 
   await callTelegram(
     "sendMessage",
-    { chat_id: chatId, text: "Invalid command. Use /start." },
+    {
+      chat_id: chatId,
+      text: "Invalid command. Use /start.",
+      reply_markup: buildReplyKeyboard(),
+    },
     env
   );
 }
@@ -136,8 +204,6 @@ async function handleCallbackQuery(query, env) {
   const data = query.data || "";
 
   if (!isOwner(userId, env)) {
-    // Always answer the callback to stop the loading spinner.
-    // Only show an alert for unauthorized users in private chats.
     if (query.message.chat.type === "private") {
       await callTelegram(
         "answerCallbackQuery",
@@ -158,7 +224,6 @@ async function handleCallbackQuery(query, env) {
     return;
   }
 
-  // Always answer the callback to stop the button loading spinner.
   await callTelegram(
     "answerCallbackQuery",
     { callback_query_id: query.id },
@@ -167,10 +232,6 @@ async function handleCallbackQuery(query, env) {
 
   if (data.startsWith("cat:")) {
     const categoryId = data.slice(4);
-
-    // buildCategoryMenu always includes a back button,
-    // so reply_markup is sent unconditionally.
-    // This fixes the empty-category bug where the back button disappeared.
     const categoryMenu = buildCategoryMenu(categoryId);
 
     await callTelegram(
@@ -181,6 +242,53 @@ async function handleCallbackQuery(query, env) {
         text: getCategoryText(categoryId),
         parse_mode: "Markdown",
         reply_markup: categoryMenu,
+      },
+      env
+    );
+    return;
+  }
+
+  if (data === "about") {
+    await callTelegram(
+      "editMessageText",
+      {
+        chat_id: chatId,
+        message_id: messageId,
+        text: getAboutText(),
+        parse_mode: "Markdown",
+        reply_markup: buildAboutMenu(owner.links),
+      },
+      env
+    );
+    return;
+  }
+
+  if (data === "help") {
+    await callTelegram(
+      "editMessageText",
+      {
+        chat_id: chatId,
+        message_id: messageId,
+        text: getHelpText(),
+        parse_mode: "Markdown",
+        reply_markup: {
+          inline_keyboard: [[{ text: "⬅️ Back", callback_data: "back:main" }]],
+        },
+      },
+      env
+    );
+    return;
+  }
+
+  if (data === "links") {
+    await callTelegram(
+      "editMessageText",
+      {
+        chat_id: chatId,
+        message_id: messageId,
+        text: getLinksText(),
+        parse_mode: "Markdown",
+        reply_markup: buildAboutMenu(owner.links),
       },
       env
     );
