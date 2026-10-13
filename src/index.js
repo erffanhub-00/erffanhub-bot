@@ -4,17 +4,22 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
-    // Temporary endpoint to register the webhook.
-    // Remove this block after the webhook is set.
-    if (url.pathname === "/setup-webhook") {
+    // Temporary endpoint: register the Telegram command menu.
+    // Call once: https://<worker>/setup-commands
+    // Remove this block after running it.
+    if (url.pathname === "/setup-commands") {
       const res = await fetch(
-        `https://api.telegram.org/bot${env.BOT_TOKEN}/setWebhook`,
+        `https://api.telegram.org/bot${env.BOT_TOKEN}/setMyCommands`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            url: "https://erffanhub-bot.erffanhub.workers.dev/webhook",
-            secret_token: env.WEBHOOK_SECRET,
+            commands: [
+              { command: "start", description: "Open the main menu" },
+              { command: "help", description: "Show help" },
+              { command: "about", description: "About the owner" },
+              { command: "links", description: "Social links" },
+            ],
           }),
         }
       );

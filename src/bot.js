@@ -2,7 +2,6 @@ import {
   buildMainMenu,
   buildCategoryMenu,
   buildAboutMenu,
-  buildReplyKeyboard,
   getMainMenuText,
   getCategoryText,
   getLinksText,
@@ -82,37 +81,7 @@ export async function handleUpdate(update, env) {
 }
 
 /**
- * Send the main menu with the persistent reply keyboard attached.
- * @param {number} chatId
- * @param {object} env
- */
-async function sendMainMenu(chatId, env) {
-  await callTelegram(
-    "sendMessage",
-    {
-      chat_id: chatId,
-      text: getMainMenuText(),
-      parse_mode: "Markdown",
-      reply_markup: buildReplyKeyboard(),
-    },
-    env
-  );
-
-  // Send the inline menu as a second message so both keyboards are visible.
-  await callTelegram(
-    "sendMessage",
-    {
-      chat_id: chatId,
-      text: "Choose a category or use the buttons below:",
-      parse_mode: "Markdown",
-      reply_markup: buildMainMenu(),
-    },
-    env
-  );
-}
-
-/**
- * Handle text messages (commands and reply keyboard button presses).
+ * Handle text messages (commands only).
  * @param {object} message
  * @param {object} env
  */
@@ -133,27 +102,37 @@ async function handleMessage(message, env) {
     return;
   }
 
-  // Commands and reply keyboard buttons.
-  if (text === "/start" || text === "📦 Menu") {
-    await sendMainMenu(chatId, env);
-    return;
-  }
-
-  if (text === "/help" || text === "📖 Help") {
+  if (text === "/start") {
     await callTelegram(
       "sendMessage",
       {
         chat_id: chatId,
-        text: getHelpText(),
+        text: getMainMenuText(),
         parse_mode: "Markdown",
-        reply_markup: buildReplyKeyboard(),
+        reply_markup: buildMainMenu(),
       },
       env
     );
     return;
   }
 
-  if (text === "/about" || text === "👤 About") {
+  if (text === "/help") {
+    await callTelegram(
+      "sendMessage",
+      {
+        chat_id: chatId,
+        text: getHelpText(),
+        parse_mode: "Markdown",
+        reply_markup: {
+          inline_keyboard: [[{ text: "⬅️ Back", callback_data: "back:main" }]],
+        },
+      },
+      env
+    );
+    return;
+  }
+
+  if (text === "/about") {
     await callTelegram(
       "sendMessage",
       {
@@ -167,7 +146,7 @@ async function handleMessage(message, env) {
     return;
   }
 
-  if (text === "🔗 Links") {
+  if (text === "/links") {
     await callTelegram(
       "sendMessage",
       {
@@ -183,11 +162,7 @@ async function handleMessage(message, env) {
 
   await callTelegram(
     "sendMessage",
-    {
-      chat_id: chatId,
-      text: "Invalid command. Use /start.",
-      reply_markup: buildReplyKeyboard(),
-    },
+    { chat_id: chatId, text: "Invalid command. Use /start." },
     env
   );
 }

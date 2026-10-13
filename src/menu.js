@@ -3,21 +3,6 @@ import toolsData from "./tools.json";
 const { categories, tools } = toolsData;
 
 /**
- * Persistent reply keyboard shown at the bottom of the screen.
- * @returns {object} Telegram reply keyboard markup
- */
-export function buildReplyKeyboard() {
-  return {
-    keyboard: [
-      [{ text: "📦 Menu" }, { text: "👤 About" }],
-      [{ text: "📖 Help" }, { text: "🔗 Links" }],
-    ],
-    resize_keyboard: true,
-    is_persistent: true,
-  };
-}
-
-/**
  * Build the inline menu for the main screen (categories + About / Help / Links).
  * @returns {object} Telegram inline keyboard markup
  */
@@ -60,7 +45,7 @@ export function buildCategoryMenu(categoryId) {
 }
 
 /**
- * Build the inline menu shown under the About screen.
+ * Build the inline menu shown under the About / Links screens.
  * @param {Array} links
  * @returns {object} Telegram inline keyboard markup
  */
