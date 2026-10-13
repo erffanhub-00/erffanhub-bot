@@ -4,6 +4,7 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
+    // Register the Telegram command menu.
     if (url.pathname === "/setup-commands") {
       const res = await fetch(
         `https://api.telegram.org/bot${env.BOT_TOKEN}/setMyCommands`,
@@ -21,10 +22,10 @@ export default {
           }),
         }
       );
-      const text = await res.text();
-      return new Response(text, { status: 200 });
+      return new Response(await res.text(), { status: 200 });
     }
 
+    // Read the currently registered commands.
     if (url.pathname === "/get-commands") {
       const res = await fetch(
         `https://api.telegram.org/bot${env.BOT_TOKEN}/getMyCommands`,
@@ -34,16 +35,14 @@ export default {
           body: JSON.stringify({ scope: { type: "default" } }),
         }
       );
-      const text = await res.text();
-      return new Response(text, { status: 200 });
+      return new Response(await res.text(), { status: 200 });
     }
 
+    // Telegram webhook.
     if (request.method === "POST" && url.pathname === "/webhook") {
       if (env.WEBHOOK_SECRET) {
-        const incomingSecret = request.headers.get(
-          "X-Telegram-Bot-Api-Secret-Token"
-        );
-        if (incomingSecret !== env.WEBHOOK_SECRET) {
+        const incoming = request.headers.get("X-Telegram-Bot-Api-Secret-Token");
+        if (incoming !== env.WEBHOOK_SECRET) {
           return new Response("Forbidden", { status: 403 });
         }
       }
@@ -52,7 +51,7 @@ export default {
         const update = await request.json();
         ctx.waitUntil(handleUpdate(update, env));
       } catch {
-        // Silently ignore malformed updates.
+        // Ignore malformed updates.
       }
 
       return new Response("OK", { status: 200 });

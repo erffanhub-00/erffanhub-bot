@@ -3,8 +3,7 @@ import toolsData from "./tools.json";
 const { categories, tools } = toolsData;
 
 /**
- * Build the inline menu for the main screen (categories + About / Help / Links).
- * @returns {object} Telegram inline keyboard markup
+ * Build the main menu: categories + About / Help / Links.
  */
 export function buildMainMenu() {
   const rows = categories.map((category) => [
@@ -25,18 +24,13 @@ export function buildMainMenu() {
 }
 
 /**
- * Build the inline menu for a specific category (tools + back button).
- * @param {string} categoryId
- * @returns {object} Telegram inline keyboard markup
+ * Build the menu for a category: tool links + back button.
  */
 export function buildCategoryMenu(categoryId) {
   const categoryTools = tools.filter((tool) => tool.category === categoryId);
 
   const rows = categoryTools.map((tool) => [
-    {
-      text: `🔗 ${tool.name}`,
-      url: tool.url,
-    },
+    { text: `🔗 ${tool.name}`, url: tool.url },
   ]);
 
   rows.push([{ text: "⬅️ Back", callback_data: "back:main" }]);
@@ -45,38 +39,31 @@ export function buildCategoryMenu(categoryId) {
 }
 
 /**
- * Build the inline menu shown under the About / Links screens.
- * @param {Array} links
- * @returns {object} Telegram inline keyboard markup
+ * Build the menu shown under About and Links screens.
  */
 export function buildAboutMenu(links) {
-  const linkRows = links.map((link) => [
+  const rows = links.map((link) => [
     { text: `🔗 ${link.label}`, url: link.url },
   ]);
 
-  linkRows.push([{ text: "⬅️ Back", callback_data: "back:main" }]);
+  rows.push([{ text: "⬅️ Back", callback_data: "back:main" }]);
 
-  return { inline_keyboard: linkRows };
+  return { inline_keyboard: rows };
 }
 
 /**
- * Text shown at the top of the main menu.
- * @returns {string}
+ * Main menu text.
  */
 export function getMainMenuText() {
   return "📦 *ErffanHub Toolbox*\n\nSelect a category:";
 }
 
 /**
- * Text shown at the top of a category menu.
- * @param {string} categoryId
- * @returns {string}
+ * Category menu text. Handles empty categories.
  */
 export function getCategoryText(categoryId) {
   const category = categories.find((c) => c.id === categoryId);
-  if (!category) {
-    return "❌ Category not found.";
-  }
+  if (!category) return "❌ Category not found.";
 
   const categoryTools = tools.filter((tool) => tool.category === categoryId);
   if (categoryTools.length === 0) {
@@ -87,8 +74,7 @@ export function getCategoryText(categoryId) {
 }
 
 /**
- * Text shown when the user opens the Links screen.
- * @returns {string}
+ * Links menu text.
  */
 export function getLinksText() {
   return "🔗 *Links*\n\nFind me on:";

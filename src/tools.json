@@ -5,25 +5,18 @@
   ],
   "tools": [
     {
-      "id": "json-format",
-      "name": "JSON Formatter",
-      "description": "Format and validate JSON",
-      "url": "https://jsonformatter.org",
-      "category": "dev"
+      "id": "website-erffan",
+      "category": "dev",
+      "name": "Website Erffan",
+      "description": "Personal website",
+      "url": "https://website-erffan.erffanhub.workers.dev/"
     },
     {
-      "id": "base64",
-      "name": "Base64 Encoder",
-      "description": "Encode and decode Base64",
-      "url": "https://www.base64encode.org",
-      "category": "dev"
-    },
-    {
-      "id": "char-count",
-      "name": "Word Counter",
-      "description": "Count characters and words",
-      "url": "https://wordcounter.net",
-      "category": "text"
+      "id": "website-status",
+      "category": "dev",
+      "name": "Website Status",
+      "description": "Check website availability",
+      "url": "https://erffanhub-00.github.io/Website-Status-Checker/"
     }
   ]
 }

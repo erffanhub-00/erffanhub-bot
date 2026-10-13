@@ -10,11 +10,7 @@ import {
 import { owner, getAboutText, getHelpText } from "./about.js";
 
 /**
- * Send a request to the Telegram Bot API and inspect the JSON body.
- * @param {string} method
- * @param {object} payload
- * @param {object} env
- * @returns {Promise<object|null>}
+ * Call the Telegram Bot API. Never logs the token or payload.
  */
 async function callTelegram(method, payload, env) {
   const url = `https://api.telegram.org/bot${env.BOT_TOKEN}/${method}`;
@@ -55,35 +51,27 @@ async function callTelegram(method, payload, env) {
 }
 
 /**
- * Check whether the given Telegram user is the bot owner.
- * @param {number} userId
- * @param {object} env
- * @returns {boolean}
+ * Check whether the user is the bot owner.
  */
 function isOwner(userId, env) {
   return String(userId) === String(env.OWNER_TELEGRAM_ID);
 }
 
 /**
- * Entry point for every Telegram update.
- * @param {object} update
- * @param {object} env
+ * Route incoming Telegram updates.
  */
 export async function handleUpdate(update, env) {
   if (update.message?.text) {
     await handleMessage(update.message, env);
     return;
   }
-
   if (update.callback_query) {
     await handleCallbackQuery(update.callback_query, env);
   }
 }
 
 /**
- * Handle text messages (commands only).
- * @param {object} message
- * @param {object} env
+ * Handle text messages and commands.
  */
 async function handleMessage(message, env) {
   const chatId = message.chat.id;
@@ -169,8 +157,6 @@ async function handleMessage(message, env) {
 
 /**
  * Handle inline keyboard button presses.
- * @param {object} query
- * @param {object} env
  */
 async function handleCallbackQuery(query, env) {
   const chatId = query.message.chat.id;
@@ -207,8 +193,6 @@ async function handleCallbackQuery(query, env) {
 
   if (data.startsWith("cat:")) {
     const categoryId = data.slice(4);
-    const categoryMenu = buildCategoryMenu(categoryId);
-
     await callTelegram(
       "editMessageText",
       {
@@ -216,7 +200,7 @@ async function handleCallbackQuery(query, env) {
         message_id: messageId,
         text: getCategoryText(categoryId),
         parse_mode: "Markdown",
-        reply_markup: categoryMenu,
+        reply_markup: buildCategoryMenu(categoryId),
       },
       env
     );
