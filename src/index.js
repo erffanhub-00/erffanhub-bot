@@ -6,7 +6,6 @@ export default {
 
     // Temporary endpoint: register the Telegram command menu.
     // Call once: https://<worker>/setup-commands
-    // Remove this block after running it.
     if (url.pathname === "/setup-commands") {
       const res = await fetch(
         `https://api.telegram.org/bot${env.BOT_TOKEN}/setMyCommands`,
@@ -14,6 +13,7 @@ export default {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
+            scope: { type: "default" },
             commands: [
               { command: "start", description: "Open the main menu" },
               { command: "help", description: "Show help" },
@@ -21,6 +21,21 @@ export default {
               { command: "links", description: "Social links" },
             ],
           }),
+        }
+      );
+      const text = await res.text();
+      return new Response(text, { status: 200 });
+    }
+
+    // Temporary endpoint: read the currently registered commands.
+    // Call once: https://<worker>/get-commands
+    if (url.pathname === "/get-commands") {
+      const res = await fetch(
+        `https://api.telegram.org/bot${env.BOT_TOKEN}/getMyCommands`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ scope: { type: "default" } }),
         }
       );
       const text = await res.text();
