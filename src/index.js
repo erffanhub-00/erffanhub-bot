@@ -4,8 +4,6 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
-    // Temporary endpoint: register the Telegram command menu.
-    // Call once: https://<worker>/setup-commands
     if (url.pathname === "/setup-commands") {
       const res = await fetch(
         `https://api.telegram.org/bot${env.BOT_TOKEN}/setMyCommands`,
@@ -27,8 +25,6 @@ export default {
       return new Response(text, { status: 200 });
     }
 
-    // Temporary endpoint: read the currently registered commands.
-    // Call once: https://<worker>/get-commands
     if (url.pathname === "/get-commands") {
       const res = await fetch(
         `https://api.telegram.org/bot${env.BOT_TOKEN}/getMyCommands`,
@@ -65,4 +61,3 @@ export default {
     return new Response("ErffanHub Toolbox", { status: 200 });
   },
 };
-// build trigger: 2026-01-01
