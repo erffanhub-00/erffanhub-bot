@@ -1,8 +1,3 @@
 name = "erffanhub-bot"
 main = "src/index.js"
 compatibility_date = "2026-01-01"
-
-[[d1_databases]]
-binding = "DB"
-database_name = "erffanhub-files"
-database_id = "c1ff4bbc-d2b7-45f3-a8d7-517c637b5dec"

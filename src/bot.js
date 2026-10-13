@@ -8,6 +8,7 @@ import {
 } from "./menu.js";
 
 import { owner, getAboutText, getHelpText } from "./about.js";
+import { handleInlineQuery } from "./inline.js";
 
 /**
  * Call the Telegram Bot API. Never logs the token or payload.
@@ -51,22 +52,77 @@ async function callTelegram(method, payload, env) {
 }
 
 /**
- * Check whether the user is the bot owner.
- */
-function isOwner(userId, env) {
-  return String(userId) === String(env.OWNER_TELEGRAM_ID);
-}
-
-/**
  * Route incoming Telegram updates.
  */
 export async function handleUpdate(update, env) {
+  // Save files from the dedicated storage group.
+  if (
+    update.message?.document ||
+    update.message?.video ||
+    update.message?.audio
+  ) {
+    await handleFileMessage(update.message, env);
+    return;
+  }
+
+  // Inline query from any chat.
+  if (update.inline_query) {
+    await handleInlineQuery(update.inline_query, env);
+    return;
+  }
+
   if (update.message?.text) {
     await handleMessage(update.message, env);
     return;
   }
+
   if (update.callback_query) {
     await handleCallbackQuery(update.callback_query, env);
+  }
+}
+
+/**
+ * Save a file's metadata to D1.
+ * Only accepts files from the configured storage group.
+ */
+async function handleFileMessage(message, env) {
+  if (!env.STORAGE_GROUP_ID) return;
+  if (String(message.chat.id) !== String(env.STORAGE_GROUP_ID)) return;
+
+  const file = message.document || message.video || message.audio;
+  if (!file) return;
+
+  const fileName = file.file_name || `file_${Date.now()}`;
+  const fileId = file.file_id;
+
+  const ext = fileName.includes(".")
+    ? fileName.split(".").pop().toLowerCase()
+    : "unknown";
+
+  let category = null;
+  if (message.caption) {
+    const match = message.caption.match(/#(\S+)/);
+    if (match) category = match[1].toLowerCase();
+  }
+
+  try {
+    await env.DB.prepare(
+      "INSERT INTO files (file_id, file_name, file_extension, category) VALUES (?, ?, ?, ?)"
+    )
+      .bind(fileId, fileName, ext, category)
+      .run();
+
+    await callTelegram(
+      "sendMessage",
+      {
+        chat_id: message.chat.id,
+        text: `✅ Saved: ${fileName}`,
+        reply_to_message_id: message.message_id,
+      },
+      env
+    );
+  } catch (err) {
+    console.error("Failed to save file:", err.message);
   }
 }
 
@@ -75,20 +131,7 @@ export async function handleUpdate(update, env) {
  */
 async function handleMessage(message, env) {
   const chatId = message.chat.id;
-  const chatType = message.chat.type;
-  const userId = message.from.id;
   const text = message.text.trim();
-
-  if (!isOwner(userId, env)) {
-    if (chatType === "private") {
-      await callTelegram(
-        "sendMessage",
-        { chat_id: chatId, text: "⛔ Access denied." },
-        env
-      );
-    }
-    return;
-  }
 
   if (text === "/start") {
     await callTelegram(
@@ -160,30 +203,8 @@ async function handleMessage(message, env) {
  */
 async function handleCallbackQuery(query, env) {
   const chatId = query.message.chat.id;
-  const userId = query.from.id;
   const messageId = query.message.message_id;
   const data = query.data || "";
-
-  if (!isOwner(userId, env)) {
-    if (query.message.chat.type === "private") {
-      await callTelegram(
-        "answerCallbackQuery",
-        {
-          callback_query_id: query.id,
-          text: "⛔ Access denied",
-          show_alert: true,
-        },
-        env
-      );
-    } else {
-      await callTelegram(
-        "answerCallbackQuery",
-        { callback_query_id: query.id },
-        env
-      );
-    }
-    return;
-  }
 
   await callTelegram(
     "answerCallbackQuery",
