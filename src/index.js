@@ -1,61 +1,43 @@
+/**
+ * Worker entry point: routing and the two admin endpoints.
+ * Every protected route requires the webhook secret; without it, 403.
+ */
 import { handleUpdate } from "./bot.js";
+import { proxyTelegram } from "./telegram.js";
+import { COMMANDS } from "./commands.js";
 
-function checkSecret(request, env) {
+function hasValidSecret(request, env) {
   if (!env.WEBHOOK_SECRET) return false;
   return request.headers.get("X-Telegram-Bot-Api-Secret-Token") === env.WEBHOOK_SECRET;
 }
+
+const ADMIN_ENDPOINTS = {
+  "/setup-commands": {
+    method: "setMyCommands",
+    payload: { scope: { type: "default" }, commands: COMMANDS },
+  },
+  "/get-commands": {
+    method: "getMyCommands",
+    payload: { scope: { type: "default" } },
+  },
+};
 
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
-    // Register the Telegram command menu.
-    if (url.pathname === "/setup-commands") {
-      if (!checkSecret(request, env)) {
+    // Admin endpoints: register or read the Telegram command menu.
+    const admin = ADMIN_ENDPOINTS[url.pathname];
+    if (admin) {
+      if (!hasValidSecret(request, env)) {
         return new Response("Forbidden", { status: 403 });
       }
-      const res = await fetch(
-        `https://api.telegram.org/bot${env.BOT_TOKEN}/setMyCommands`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            scope: { type: "default" },
-            commands: [
-              { command: "start", description: "Open the main menu" },
-              { command: "help", description: "Show help" },
-              { command: "about", description: "About the owner" },
-              { command: "links", description: "Social links" },
-            ],
-          }),
-        }
-      );
-      return new Response(await res.text(), { status: res.status });
-    }
-
-    // Read the currently registered commands.
-    if (url.pathname === "/get-commands") {
-      if (!checkSecret(request, env)) {
-        return new Response("Forbidden", { status: 403 });
-      }
-      const res = await fetch(
-        `https://api.telegram.org/bot${env.BOT_TOKEN}/getMyCommands`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ scope: { type: "default" } }),
-        }
-      );
-      return new Response(await res.text(), { status: res.status });
+      return proxyTelegram(admin.method, admin.payload, env);
     }
 
     // Telegram webhook.
     if (request.method === "POST" && url.pathname === "/webhook") {
-      if (!env.WEBHOOK_SECRET) {
-        return new Response("Forbidden", { status: 403 });
-      }
-      const incoming = request.headers.get("X-Telegram-Bot-Api-Secret-Token");
-      if (incoming !== env.WEBHOOK_SECRET) {
+      if (!hasValidSecret(request, env)) {
         return new Response("Forbidden", { status: 403 });
       }
 
@@ -66,6 +48,7 @@ export default {
         // Ignore malformed updates.
       }
 
+      // Always 200: a non-200 makes Telegram retry the update.
       return new Response("OK", { status: 200 });
     }
 

@@ -1,6 +1,8 @@
 /**
  * Owner profile and social links.
  */
+import { COMMANDS } from "./commands.js";
+
 export const owner = {
   name: "Erffan",
   tagline: "Developer & Tool Builder",
@@ -21,19 +23,17 @@ export function getAboutText() {
 }
 
 /**
- * Text shown in the Help screen.
+ * Text shown in the Help screen. The command list comes from src/commands.js.
  */
 export function getHelpText() {
+  const commandLines = COMMANDS.map((c) => `/${c.command} — ${c.description}`);
   return [
     "📖 *Help*",
     "",
     "This bot is a personal toolbox. It organizes tools into categories and opens them in your browser.",
     "",
     "*Commands*",
-    "/start — Open the main menu",
-    "/help — Show this help message",
-    "/about — About the owner",
-    "/links — Social links",
+    ...commandLines,
     "",
     "*How it works*",
     "1. Pick a category from the main menu.",

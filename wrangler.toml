@@ -5,4 +5,6 @@ compatibility_date = "2026-01-01"
 [[d1_databases]]
 binding = "DB"
 database_name = "erffanhub-bot-files"
+# Replace with the real id from `npx wrangler d1 create erffanhub-bot-files`
+# (or an existing database). See README, Quickstart.
 database_id = "DATABASE_ID_HERE"

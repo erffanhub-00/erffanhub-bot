@@ -1,26 +1,10 @@
-import toolsData from "./tools.json" with { type: "json" };
+/**
+ * Inline keyboards and their texts. Data comes from src/tools.js, so the menu
+ * always matches tools.json.
+ */
+import { categories, getCategory, getToolsByCategory } from "./tools.js";
 
-const { categories, tools } = toolsData;
-
-const categoryIds = new Set(categories.map((c) => c.id));
-const toolIds = new Set();
-for (const category of categories) {
-  if (!category.id || !category.name) {
-    throw new Error("tools.json: category needs id and name");
-  }
-}
-for (const tool of tools) {
-  if (!categoryIds.has(tool.category)) {
-    throw new Error(`tools.json: tool ${tool.id} has unknown category ${tool.category}`);
-  }
-  if (toolIds.has(tool.id)) {
-    throw new Error(`tools.json: duplicate tool id ${tool.id}`);
-  }
-  toolIds.add(tool.id);
-  if (!tool.url || !tool.url.startsWith("https://")) {
-    throw new Error(`tools.json: tool ${tool.id} url must start with https://`);
-  }
-}
+const BACK_BUTTON = [{ text: "⬅️ Back", callback_data: "back:main" }];
 
 /**
  * Build the main menu: categories + About / Help / Links.
@@ -47,13 +31,11 @@ export function buildMainMenu() {
  * Build the menu for a category: tool links + back button.
  */
 export function buildCategoryMenu(categoryId) {
-  const categoryTools = tools.filter((tool) => tool.category === categoryId);
-
-  const rows = categoryTools.map((tool) => [
+  const rows = getToolsByCategory(categoryId).map((tool) => [
     { text: `🔗 ${tool.name}`, url: tool.url },
   ]);
 
-  rows.push([{ text: "⬅️ Back", callback_data: "back:main" }]);
+  rows.push(BACK_BUTTON);
 
   return { inline_keyboard: rows };
 }
@@ -62,11 +44,9 @@ export function buildCategoryMenu(categoryId) {
  * Build the menu shown under About and Links screens.
  */
 export function buildAboutMenu(links) {
-  const rows = links.map((link) => [
-    { text: `🔗 ${link.label}`, url: link.url },
-  ]);
+  const rows = links.map((link) => [{ text: `🔗 ${link.label}`, url: link.url }]);
 
-  rows.push([{ text: "⬅️ Back", callback_data: "back:main" }]);
+  rows.push(BACK_BUTTON);
 
   return { inline_keyboard: rows };
 }
@@ -82,10 +62,10 @@ export function getMainMenuText() {
  * Category menu text. Handles empty categories.
  */
 export function getCategoryText(categoryId) {
-  const category = categories.find((c) => c.id === categoryId);
+  const category = getCategory(categoryId);
   if (!category) return "❌ Category not found.";
 
-  const categoryTools = tools.filter((tool) => tool.category === categoryId);
+  const categoryTools = getToolsByCategory(categoryId);
   if (categoryTools.length === 0) {
     return `📂 *${category.name}*\n\n⚠️ No tools in this category yet.`;
   }

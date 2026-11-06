@@ -1,3 +1,6 @@
+/**
+ * Telegram update routing: files, inline queries, commands, button presses.
+ */
 import {
   buildMainMenu,
   buildCategoryMenu,
@@ -6,54 +9,12 @@ import {
   getCategoryText,
   getLinksText,
 } from "./menu.js";
-
 import { owner, getAboutText, getHelpText } from "./about.js";
 import { handleInlineQuery } from "./inline.js";
-
-function isOwner(userId, env) {
-  return Boolean(env.OWNER_TELEGRAM_ID) && String(userId) === String(env.OWNER_TELEGRAM_ID);
-}
-
-/**
- * Call the Telegram Bot API. Never logs the token or payload.
- */
-async function callTelegram(method, payload, env) {
-  const url = `https://api.telegram.org/bot${env.BOT_TOKEN}/${method}`;
-
-  let response;
-  try {
-    response = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-  } catch (err) {
-    console.error(`Network error on ${method}: ${err.message}`);
-    return null;
-  }
-
-  if (!response.ok) {
-    console.error(`Telegram HTTP error on ${method}: ${response.status}`);
-    return null;
-  }
-
-  let body;
-  try {
-    body = await response.json();
-  } catch {
-    console.error(`Invalid JSON from Telegram on ${method}`);
-    return null;
-  }
-
-  if (!body.ok) {
-    console.error(
-      `Telegram API rejected ${method}: ${body.description || "unknown error"}`
-    );
-    return null;
-  }
-
-  return body.result;
-}
+import { isOwner } from "./auth.js";
+import { sendMessage, editMessageText, answerCallbackQuery } from "./telegram.js";
+import { parseCommand } from "./commands.js";
+import { hasFile, saveFileMessage } from "./files.js";
 
 /**
  * Route incoming Telegram updates.
@@ -61,13 +22,8 @@ async function callTelegram(method, payload, env) {
 export async function handleUpdate(update, env) {
   try {
     // Save files from the dedicated storage group.
-    if (
-      update.message?.document ||
-      update.message?.video ||
-      update.message?.audio ||
-      update.message?.photo
-    ) {
-      await handleFileMessage(update.message, env);
+    if (update.message && hasFile(update.message)) {
+      await saveFileMessage(update.message, env);
       return;
     }
 
@@ -90,243 +46,96 @@ export async function handleUpdate(update, env) {
   }
 }
 
-/**
- * Save a file's metadata to D1.
- * Only accepts files from the configured storage group.
- */
-async function handleFileMessage(message, env) {
-  if (!env.STORAGE_GROUP_ID) return;
-  if (String(message.chat.id) !== String(env.STORAGE_GROUP_ID)) return;
-  if (!isOwner(message.from?.id, env)) return;
+const BACK_BUTTON = [{ text: "⬅️ Back", callback_data: "back:main" }];
 
-  const photo = message.photo ? message.photo[message.photo.length - 1] : null;
-  const file = message.document || message.video || message.audio || photo;
-  if (!file) return;
-
-  const fileName = file.file_name || (photo ? `photo_${Date.now()}.jpg` : `file_${Date.now()}`);
-  const fileId = file.file_id;
-
-  const ext = fileName.includes(".")
-    ? fileName.split(".").pop().toLowerCase()
-    : "unknown";
-
-  let category = null;
-  if (message.caption) {
-    const match = message.caption.match(/#(\S+)/);
-    if (match) category = match[1].toLowerCase();
-  }
-
-  try {
-    const existing = await env.DB.prepare(
-      "SELECT 1 FROM files WHERE file_id = ? LIMIT 1"
-    )
-      .bind(fileId)
-      .all();
-    if ((existing.results || []).length > 0) return;
-
-    await env.DB.prepare(
-      "INSERT INTO files (file_id, file_name, file_extension, category) VALUES (?, ?, ?, ?)"
-    )
-      .bind(fileId, fileName, ext, category)
-      .run();
-
-    await callTelegram(
-      "sendMessage",
-      {
-        chat_id: message.chat.id,
-        text: `✅ Saved: ${fileName}`,
-        reply_to_message_id: message.message_id,
-      },
-      env
-    );
-  } catch (err) {
-    console.error("Failed to save file:", err.message);
-  }
-}
+const COMMAND_HANDLERS = {
+  start: (chatId, env) =>
+    sendMessage(chatId, getMainMenuText(), env, {
+      parse_mode: "Markdown",
+      reply_markup: buildMainMenu(),
+    }),
+  help: (chatId, env) =>
+    sendMessage(chatId, getHelpText(), env, {
+      parse_mode: "Markdown",
+      reply_markup: { inline_keyboard: [BACK_BUTTON] },
+    }),
+  about: (chatId, env) =>
+    sendMessage(chatId, getAboutText(), env, {
+      parse_mode: "Markdown",
+      reply_markup: buildAboutMenu(owner.links),
+    }),
+  links: (chatId, env) =>
+    sendMessage(chatId, getLinksText(), env, {
+      parse_mode: "Markdown",
+      reply_markup: buildAboutMenu(owner.links),
+    }),
+};
 
 /**
- * Handle text messages and commands.
+ * Handle text messages and commands. Only the owner gets a reply in private
+ * chats; everyone else is ignored silently in groups.
  */
 async function handleMessage(message, env) {
   const chatId = message.chat.id;
-  const text = message.text.trim();
 
   if (!isOwner(message.from?.id, env)) {
     if (message.chat.type === "private") {
-      await callTelegram(
-        "sendMessage",
-        { chat_id: chatId, text: "This bot is private." },
-        env
-      );
+      await sendMessage(chatId, "This bot is private.", env);
     }
     return;
   }
 
-  const command = text.split(/\s+/)[0].split("@")[0];
-
-  if (command === "/start") {
-    await callTelegram(
-      "sendMessage",
-      {
-        chat_id: chatId,
-        text: getMainMenuText(),
-        parse_mode: "Markdown",
-        reply_markup: buildMainMenu(),
-      },
-      env
-    );
+  const handler = COMMAND_HANDLERS[parseCommand(message.text)];
+  if (handler) {
+    await handler(chatId, env);
     return;
   }
 
-  if (command === "/help") {
-    await callTelegram(
-      "sendMessage",
-      {
-        chat_id: chatId,
-        text: getHelpText(),
-        parse_mode: "Markdown",
-        reply_markup: {
-          inline_keyboard: [[{ text: "⬅️ Back", callback_data: "back:main" }]],
-        },
-      },
-      env
-    );
-    return;
-  }
-
-  if (command === "/about") {
-    await callTelegram(
-      "sendMessage",
-      {
-        chat_id: chatId,
-        text: getAboutText(),
-        parse_mode: "Markdown",
-        reply_markup: buildAboutMenu(owner.links),
-      },
-      env
-    );
-    return;
-  }
-
-  if (command === "/links") {
-    await callTelegram(
-      "sendMessage",
-      {
-        chat_id: chatId,
-        text: getLinksText(),
-        parse_mode: "Markdown",
-        reply_markup: buildAboutMenu(owner.links),
-      },
-      env
-    );
-    return;
-  }
-
-  await callTelegram(
-    "sendMessage",
-    { chat_id: chatId, text: "Invalid command. Use /start." },
-    env
-  );
+  await sendMessage(chatId, "Invalid command. Use /start.", env);
 }
+
+function editMenu(chatId, messageId, text, markup, env) {
+  return editMessageText(chatId, messageId, text, env, {
+    parse_mode: "Markdown",
+    reply_markup: markup,
+  });
+}
+
+const CALLBACK_SCREENS = {
+  about: () => [getAboutText(), buildAboutMenu(owner.links)],
+  help: () => [getHelpText(), { inline_keyboard: [BACK_BUTTON] }],
+  links: () => [getLinksText(), buildAboutMenu(owner.links)],
+  "back:main": () => [getMainMenuText(), buildMainMenu()],
+};
 
 /**
  * Handle inline keyboard button presses.
  */
 async function handleCallbackQuery(query, env) {
   if (!isOwner(query.from?.id, env)) {
-    await callTelegram(
-      "answerCallbackQuery",
-      { callback_query_id: query.id, text: "This bot is private.", show_alert: true },
-      env
-    );
+    await answerCallbackQuery(query.id, env, {
+      text: "This bot is private.",
+      show_alert: true,
+    });
     return;
   }
   if (!query.message) return;
+
+  await answerCallbackQuery(query.id, env);
 
   const chatId = query.message.chat.id;
   const messageId = query.message.message_id;
   const data = query.data || "";
 
-  await callTelegram(
-    "answerCallbackQuery",
-    { callback_query_id: query.id },
-    env
-  );
-
   if (data.startsWith("cat:")) {
     const categoryId = data.slice(4);
-    await callTelegram(
-      "editMessageText",
-      {
-        chat_id: chatId,
-        message_id: messageId,
-        text: getCategoryText(categoryId),
-        parse_mode: "Markdown",
-        reply_markup: buildCategoryMenu(categoryId),
-      },
-      env
-    );
+    await editMenu(chatId, messageId, getCategoryText(categoryId), buildCategoryMenu(categoryId), env);
     return;
   }
 
-  if (data === "about") {
-    await callTelegram(
-      "editMessageText",
-      {
-        chat_id: chatId,
-        message_id: messageId,
-        text: getAboutText(),
-        parse_mode: "Markdown",
-        reply_markup: buildAboutMenu(owner.links),
-      },
-      env
-    );
-    return;
-  }
+  const screen = CALLBACK_SCREENS[data];
+  if (!screen) return;
 
-  if (data === "help") {
-    await callTelegram(
-      "editMessageText",
-      {
-        chat_id: chatId,
-        message_id: messageId,
-        text: getHelpText(),
-        parse_mode: "Markdown",
-        reply_markup: {
-          inline_keyboard: [[{ text: "⬅️ Back", callback_data: "back:main" }]],
-        },
-      },
-      env
-    );
-    return;
-  }
-
-  if (data === "links") {
-    await callTelegram(
-      "editMessageText",
-      {
-        chat_id: chatId,
-        message_id: messageId,
-        text: getLinksText(),
-        parse_mode: "Markdown",
-        reply_markup: buildAboutMenu(owner.links),
-      },
-      env
-    );
-    return;
-  }
-
-  if (data === "back:main") {
-    await callTelegram(
-      "editMessageText",
-      {
-        chat_id: chatId,
-        message_id: messageId,
-        text: getMainMenuText(),
-        parse_mode: "Markdown",
-        reply_markup: buildMainMenu(),
-      },
-      env
-    );
-  }
+  const [text, markup] = screen();
+  await editMenu(chatId, messageId, text, markup, env);
 }
