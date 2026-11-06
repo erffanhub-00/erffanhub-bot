@@ -1,6 +1,26 @@
-import toolsData from "./tools.json";
+import toolsData from "./tools.json" with { type: "json" };
 
 const { categories, tools } = toolsData;
+
+const categoryIds = new Set(categories.map((c) => c.id));
+const toolIds = new Set();
+for (const category of categories) {
+  if (!category.id || !category.name) {
+    throw new Error("tools.json: category needs id and name");
+  }
+}
+for (const tool of tools) {
+  if (!categoryIds.has(tool.category)) {
+    throw new Error(`tools.json: tool ${tool.id} has unknown category ${tool.category}`);
+  }
+  if (toolIds.has(tool.id)) {
+    throw new Error(`tools.json: duplicate tool id ${tool.id}`);
+  }
+  toolIds.add(tool.id);
+  if (!tool.url || !tool.url.startsWith("https://")) {
+    throw new Error(`tools.json: tool ${tool.id} url must start with https://`);
+  }
+}
 
 /**
  * Build the main menu: categories + About / Help / Links.
@@ -8,7 +28,7 @@ const { categories, tools } = toolsData;
 export function buildMainMenu() {
   const rows = categories.map((category) => [
     {
-      text: `${category.emoji} ${category.name}`.trim(),
+      text: [category.emoji, category.name].filter(Boolean).join(" "),
       callback_data: `cat:${category.id}`,
     },
   ]);

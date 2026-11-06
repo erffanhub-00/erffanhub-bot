@@ -10,6 +10,10 @@ import {
 import { owner, getAboutText, getHelpText } from "./about.js";
 import { handleInlineQuery } from "./inline.js";
 
+function isOwner(userId, env) {
+  return Boolean(env.OWNER_TELEGRAM_ID) && String(userId) === String(env.OWNER_TELEGRAM_ID);
+}
+
 /**
  * Call the Telegram Bot API. Never logs the token or payload.
  */
@@ -55,29 +59,34 @@ async function callTelegram(method, payload, env) {
  * Route incoming Telegram updates.
  */
 export async function handleUpdate(update, env) {
-  // Save files from the dedicated storage group.
-  if (
-    update.message?.document ||
-    update.message?.video ||
-    update.message?.audio
-  ) {
-    await handleFileMessage(update.message, env);
-    return;
-  }
+  try {
+    // Save files from the dedicated storage group.
+    if (
+      update.message?.document ||
+      update.message?.video ||
+      update.message?.audio ||
+      update.message?.photo
+    ) {
+      await handleFileMessage(update.message, env);
+      return;
+    }
 
-  // Inline query from any chat.
-  if (update.inline_query) {
-    await handleInlineQuery(update.inline_query, env);
-    return;
-  }
+    // Inline query from any chat.
+    if (update.inline_query) {
+      await handleInlineQuery(update.inline_query, env);
+      return;
+    }
 
-  if (update.message?.text) {
-    await handleMessage(update.message, env);
-    return;
-  }
+    if (update.message?.text) {
+      await handleMessage(update.message, env);
+      return;
+    }
 
-  if (update.callback_query) {
-    await handleCallbackQuery(update.callback_query, env);
+    if (update.callback_query) {
+      await handleCallbackQuery(update.callback_query, env);
+    }
+  } catch (err) {
+    console.error("Failed to handle update:", err.message);
   }
 }
 
@@ -88,11 +97,13 @@ export async function handleUpdate(update, env) {
 async function handleFileMessage(message, env) {
   if (!env.STORAGE_GROUP_ID) return;
   if (String(message.chat.id) !== String(env.STORAGE_GROUP_ID)) return;
+  if (!isOwner(message.from?.id, env)) return;
 
-  const file = message.document || message.video || message.audio;
+  const photo = message.photo ? message.photo[message.photo.length - 1] : null;
+  const file = message.document || message.video || message.audio || photo;
   if (!file) return;
 
-  const fileName = file.file_name || `file_${Date.now()}`;
+  const fileName = file.file_name || (photo ? `photo_${Date.now()}.jpg` : `file_${Date.now()}`);
   const fileId = file.file_id;
 
   const ext = fileName.includes(".")
@@ -106,6 +117,13 @@ async function handleFileMessage(message, env) {
   }
 
   try {
+    const existing = await env.DB.prepare(
+      "SELECT 1 FROM files WHERE file_id = ? LIMIT 1"
+    )
+      .bind(fileId)
+      .all();
+    if ((existing.results || []).length > 0) return;
+
     await env.DB.prepare(
       "INSERT INTO files (file_id, file_name, file_extension, category) VALUES (?, ?, ?, ?)"
     )
@@ -133,7 +151,20 @@ async function handleMessage(message, env) {
   const chatId = message.chat.id;
   const text = message.text.trim();
 
-  if (text === "/start") {
+  if (!isOwner(message.from?.id, env)) {
+    if (message.chat.type === "private") {
+      await callTelegram(
+        "sendMessage",
+        { chat_id: chatId, text: "This bot is private." },
+        env
+      );
+    }
+    return;
+  }
+
+  const command = text.split(/\s+/)[0].split("@")[0];
+
+  if (command === "/start") {
     await callTelegram(
       "sendMessage",
       {
@@ -147,7 +178,7 @@ async function handleMessage(message, env) {
     return;
   }
 
-  if (text === "/help") {
+  if (command === "/help") {
     await callTelegram(
       "sendMessage",
       {
@@ -163,7 +194,7 @@ async function handleMessage(message, env) {
     return;
   }
 
-  if (text === "/about") {
+  if (command === "/about") {
     await callTelegram(
       "sendMessage",
       {
@@ -177,7 +208,7 @@ async function handleMessage(message, env) {
     return;
   }
 
-  if (text === "/links") {
+  if (command === "/links") {
     await callTelegram(
       "sendMessage",
       {
@@ -202,6 +233,16 @@ async function handleMessage(message, env) {
  * Handle inline keyboard button presses.
  */
 async function handleCallbackQuery(query, env) {
+  if (!isOwner(query.from?.id, env)) {
+    await callTelegram(
+      "answerCallbackQuery",
+      { callback_query_id: query.id, text: "This bot is private.", show_alert: true },
+      env
+    );
+    return;
+  }
+  if (!query.message) return;
+
   const chatId = query.message.chat.id;
   const messageId = query.message.message_id;
   const data = query.data || "";

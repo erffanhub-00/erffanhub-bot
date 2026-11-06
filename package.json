@@ -1,10 +1,18 @@
 {
   "name": "erffanhubbot",
   "version": "1.0.0",
+  "description": "Personal Telegram bot on Cloudflare Workers: a toolbox menu plus D1-backed file search.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/erffanhub-00/erffanhub-bot.git"
+  },
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy"
+    "deploy": "wrangler deploy",
+    "test": "node --test"
   },
   "devDependencies": {
     "wrangler": "^4.0.0"

@@ -1,11 +1,19 @@
 import { handleUpdate } from "./bot.js";
 
+function checkSecret(request, env) {
+  if (!env.WEBHOOK_SECRET) return false;
+  return request.headers.get("X-Telegram-Bot-Api-Secret-Token") === env.WEBHOOK_SECRET;
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
     // Register the Telegram command menu.
     if (url.pathname === "/setup-commands") {
+      if (!checkSecret(request, env)) {
+        return new Response("Forbidden", { status: 403 });
+      }
       const res = await fetch(
         `https://api.telegram.org/bot${env.BOT_TOKEN}/setMyCommands`,
         {
@@ -22,11 +30,14 @@ export default {
           }),
         }
       );
-      return new Response(await res.text(), { status: 200 });
+      return new Response(await res.text(), { status: res.status });
     }
 
     // Read the currently registered commands.
     if (url.pathname === "/get-commands") {
+      if (!checkSecret(request, env)) {
+        return new Response("Forbidden", { status: 403 });
+      }
       const res = await fetch(
         `https://api.telegram.org/bot${env.BOT_TOKEN}/getMyCommands`,
         {
@@ -35,16 +46,17 @@ export default {
           body: JSON.stringify({ scope: { type: "default" } }),
         }
       );
-      return new Response(await res.text(), { status: 200 });
+      return new Response(await res.text(), { status: res.status });
     }
 
     // Telegram webhook.
     if (request.method === "POST" && url.pathname === "/webhook") {
-      if (env.WEBHOOK_SECRET) {
-        const incoming = request.headers.get("X-Telegram-Bot-Api-Secret-Token");
-        if (incoming !== env.WEBHOOK_SECRET) {
-          return new Response("Forbidden", { status: 403 });
-        }
+      if (!env.WEBHOOK_SECRET) {
+        return new Response("Forbidden", { status: 403 });
+      }
+      const incoming = request.headers.get("X-Telegram-Bot-Api-Secret-Token");
+      if (incoming !== env.WEBHOOK_SECRET) {
+        return new Response("Forbidden", { status: 403 });
       }
 
       try {

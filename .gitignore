@@ -2,5 +2,3 @@ node_modules/
 .dev.vars
 .env
 .wrangler/
-1.md
-bot-ev.js
