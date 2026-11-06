@@ -2,14 +2,15 @@
 
 A personal Telegram bot that organizes tools into categories and opens them in the browser, plus inline search over files saved to a private group.
 
-Built with Cloudflare Workers, the Telegram Bot API, and Cloudflare D1. No framework, no runtime dependencies.
+Built with Cloudflare Workers, the Telegram Bot API, and Cloudflare D1.
 
 Live bot: https://t.me/erffanhubbot
 
+[![CI](https://github.com/erffanhub-00/erffanhub-bot/actions/workflows/ci.yml/badge.svg)](https://github.com/erffanhub-00/erffanhub-bot/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Telegram](https://img.shields.io/badge/Telegram-erffan__hub-blue?style=for-the-badge&logo=telegram)](https://t.me/erffan_hub)
-[![Twitter](https://img.shields.io/badge/Twitter-@Erffanhub__00-000000?style=for-the-badge&logo=x&logoColor=white)](https://x.com/Erffanhub_00)
+[![X](https://img.shields.io/badge/X-@Erffanhub__00-000000?style=for-the-badge&logo=x&logoColor=white)](https://x.com/Erffanhub_00)
 [![GitHub](https://img.shields.io/badge/GitHub-erffanhub--00-000000?style=for-the-badge&logo=github)](https://github.com/erffanhub-00)
-[![Gist](https://img.shields.io/badge/Gist-Profile-000000?style=for-the-badge&logo=github)](https://gist.github.com/erffanhub-00)
 
 ## Features
 
@@ -96,9 +97,6 @@ There is no automatic deploy on git push. Deploy manually from the project
 folder:
 
 ```bash
-git add .
-git commit -m "update tools"
-git push
 npx wrangler deploy
 ```
 
@@ -282,7 +280,7 @@ objects up or down to reorder categories or tools.
 ## Development
 
 ```bash
-npm test    # run the test suite (Node's built-in runner, no dependencies)
+npm test       # run the test suite (Node's built-in runner, no dependencies)
 npm run check  # syntax-check every source file
 npm run dev    # run the Worker locally with wrangler
 ```
