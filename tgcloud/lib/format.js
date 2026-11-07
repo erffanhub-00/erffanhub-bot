@@ -1,11 +1,8 @@
 // Pure formatting helpers shared by both handlers. No 'sdk' import.
 
-export const DRAFT_STATUS_FA = {
-  draft: 'پیش‌نویس',
-  scheduled: 'زمان‌بندی‌شده',
-  published: 'منتشرشده',
-  discarded: 'حذف‌شده',
-};
+import { formatBytes } from './pure.js';
+
+export { formatBytes };
 
 export function truncate(text, max) {
   const s = String(text ?? '');
@@ -14,6 +11,7 @@ export function truncate(text, max) {
 
 // Tehran wall time, Persian locale.
 export function formatTehran(ms) {
+  if (!ms) return '—';
   return new Intl.DateTimeFormat('fa-IR', {
     timeZone: 'Asia/Tehran',
     dateStyle: 'medium',
@@ -21,49 +19,54 @@ export function formatTehran(ms) {
   }).format(new Date(ms));
 }
 
-// Full draft text for a screen view (capped at Telegram's 4096 chars).
-export function formatDraft(draft) {
+const KIND_FA = {
+  document: 'فایل',
+  photo: 'عکس',
+  video: 'ویدیو',
+  audio: 'صوتی',
+  voice: 'ویس',
+};
+
+// One line of file info: "F001 — عنوان (v2، ۳ پارت، ۱۲٫۴ مگابایت)".
+export function fileLine(file) {
+  const parts =
+    (file.parts_count || 1) > 1 ? `، ${file.parts_count} پارت` : '';
+  const size = file.size_total ? `، ${formatBytes(file.size_total)}` : '';
+  const ver = file.version ? ` v${file.version}` : '';
+  return `${file.id} — ${truncate(file.title || '(بدون عنوان)', 45)}${ver}${parts}${size}`;
+}
+
+// Full file view text. Shows the title (the owner's label) AND the
+// original Telegram file name, verbatim — the bot never renames a file.
+export function formatFile(file, parts, versions, downloadCount) {
   const lines = [];
-  if (draft.title) lines.push(draft.title);
-  if (draft.body) lines.push('', draft.body);
-  if (draft.source_url) {
-    lines.push('', (draft.kind === 'youtube' ? 'ویدیو: ' : 'منبع: ') + draft.source_url);
+  lines.push(`${file.id} — ${file.title || '(بدون عنوان)'}`);
+  lines.push('');
+  if (file.description) lines.push(file.description, '');
+  const names = (parts || []).map((p) => p.file_name).filter(Boolean);
+  if (names.length === 1) lines.push(`نام فایل: ${names[0]}`);
+  if (names.length > 1) {
+    lines.push('نام فایل‌ها:');
+    for (const [i, n] of names.entries()) lines.push(`  ${i + 1}. ${n}`);
   }
-  if (draft.status === 'scheduled' && draft.publish_at) {
-    lines.push('', 'زمان انتشار: ' + formatTehran(draft.publish_at));
-  }
-  const text = lines.join('\n').trim() || '(پیش‌نویس خالی)';
-  return truncate(text, 4000);
+  lines.push(`دسته: ${file.category || 'سایر'}`);
+  lines.push(`نسخه: v${file.version || 1} (از ${versions.length} نسخه)`);
+  lines.push(`نوع: ${KIND_FA[file.kind] || file.kind || '—'}`);
+  if (file.size_total) lines.push(`حجم: ${formatBytes(file.size_total)}`);
+  lines.push(`پارت‌ها: ${parts.length}`);
+  lines.push(`دانلودها: ${downloadCount}`);
+  if (file.created_at) lines.push(`افزوده شده: ${formatTehran(file.created_at)}`);
+  return truncate(lines.join('\n'), 4000);
 }
 
-// Draft shape the Worker expects for /publish and /schedule.
-export function draftPayload(draft) {
-  return {
-    id: draft.id,
-    title: draft.title,
-    body: draft.body,
-    media_url: draft.media_url || undefined,
-    source_url: draft.source_url || undefined,
-    button_text: draft.button_text || undefined,
-    button_url: draft.button_url || undefined,
-  };
-}
-
-// RSS/Atom published_at comes as seconds, ms or an ISO string.
-export function parsePublishedAt(value) {
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return value < 1000000000000 ? value * 1000 : value;
-  }
-  if (typeof value === 'string' && value) {
-    const ms = Date.parse(value);
-    return Number.isNaN(ms) ? null : ms;
-  }
-  return null;
-}
-
-// Public link to a channel message (only for public channels, id -100...).
-export function channelMessageLink(channelId, messageId) {
-  const s = String(channelId);
-  if (s.startsWith('-100')) return `https://t.me/c/${s.slice(4)}/${messageId}`;
-  return null;
+// Seconds as "1:23" / "1:02:03".
+export function formatDuration(seconds) {
+  const s = Number(seconds);
+  if (!Number.isFinite(s) || s < 0) return '—';
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = Math.floor(s % 60);
+  const mm = h > 0 ? String(m).padStart(2, '0') : String(m);
+  const ss = String(sec).padStart(2, '0');
+  return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
 }

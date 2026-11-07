@@ -1,50 +1,57 @@
-// Bot-only callback handler (v7). Every button edits the same screen
-// message in place — nothing new is sent. The inbox is a review queue:
-// pick a group (topic category or RSS feed), then review its items one by
-// one with exactly 3 buttons — confirm, previous, next. All data comes
-// from lib/inbox.js, lib/review.js and lib/views.js.
+// Callback handler (v1). Every button edits the same screen message
+// in place — the only new messages are the delivered files. User
+// tracking runs on every interaction. Stats and DB-group actions are
+// owner-only; everything else re-checks force-join membership.
 
-import { api, db } from 'sdk';
-import { eq } from 'sdk/db';
-import { news_items, drafts, rss_feeds } from '../schema.js';
+import { api } from 'sdk';
 import { isOwner } from '../lib/auth.js';
-import { callWorker } from '../lib/worker.js';
-import { workerErrorMessage } from '../lib/errors.js';
-import { draftPayload, channelMessageLink } from '../lib/format.js';
-import { getSetting, setSetting, deleteSetting, getChannel } from '../lib/store.js';
-import { itemsForGroup, groupLabel, neighborIndex } from '../lib/review.js';
+import { SOCIALS } from '../lib/config.js';
 import {
-  fetchNews,
-  inboxMenu,
-  listNewItems,
-  listDrafts,
-  listScheduled,
-  listFeeds,
-  listYouTubeDrafts,
-  getNewsItem,
-  getDraft,
-  getFeed,
-  getCounts,
-} from '../lib/inbox.js';
+  getSetting,
+  setSetting,
+  deleteSetting,
+  trackUser,
+  listFiles,
+  listCategories,
+  getUser,
+  getFile,
+  deleteFile,
+  getUserDownloads,
+} from '../lib/store.js';
+import { needsPhonePrompt, categoryOptions } from '../lib/pure.js';
+import {
+  checkMembership,
+  membershipPassed,
+  missingMembership,
+  isDbGroup,
+  searchLibrary,
+  getStatsData,
+  getStatsUsers,
+  getFileViewModel,
+  countDownloads,
+  deliverParts,
+} from '../lib/library.js';
+import { getProjects } from '../lib/github.js';
 import {
   mainMenuView,
   helpView,
   errorView,
-  reviewView,
-  groupFinishedView,
-  draftView,
-  confirmPublishView,
-  draftsView,
-  youtubeView,
-  scheduledView,
-  feedsView,
-  promptEditView,
-  promptScheduleView,
-  promptFeedUrlView,
+  joinView,
+  projectsView,
+  socialsView,
+  filesView,
+  categoriesView,
+  categoryFilesView,
+  fileView,
+  searchPromptView,
+  statsView,
+  statsUsersView,
+  statsUserView,
+  statsFilesView,
+  statsFileView,
+  promptTitleView,
 } from '../lib/views.js';
 
-// Edit the screen message. An edit that fails (e.g. identical text) is
-// ignored — the screen already shows what it should.
 async function editScreen(chatId, messageId, view) {
   try {
     await api.editMessageText({
@@ -58,504 +65,345 @@ async function editScreen(chatId, messageId, view) {
   }
 }
 
-// Error screen with a "back" button instead of the main-menu button.
-function errorWithBack(message, backData) {
-  return {
-    text: message,
-    reply_markup: {
-      inline_keyboard: [[{ text: 'بازگشت', callback_data: backData }]],
-    },
-  };
-}
-
-async function feedNameFor(item) {
-  if (!item?.feed_id) return null;
-  const feed = await getFeed(item.feed_id);
-  return feed?.name || feed?.url || null;
-}
-
-// Show one review item: the group, its items and the item's index.
-// Falls back to the first item (or the finished screen) when the stored
-// item is gone.
-async function showReview(chatId, messageId, groupKey, itemId) {
-  const items = itemsForGroup(await listNewItems(), groupKey);
-  const feeds = await listFeeds();
-  const label = groupLabel(groupKey, feeds);
-  if (items.length === 0) {
-    await editScreen(chatId, messageId, groupFinishedView(label));
-    return;
-  }
-  let index = items.findIndex((it) => it.id === Number(itemId));
-  if (index === -1) index = 0;
-  const item = items[index];
-  await editScreen(
-    chatId,
-    messageId,
-    reviewView(item, groupKey, label, index, items.length, await feedNameFor(item)),
-  );
-}
-
-async function storeReview(ownerId, groupKey, itemId) {
-  await setSetting(`review_group:${ownerId}`, groupKey);
-  if (itemId) {
-    await setSetting(`review_item:${ownerId}`, String(itemId));
-  } else {
-    await deleteSetting(`review_item:${ownerId}`);
-  }
-}
-
-// Build a draft from a news item with the AI writer, then hard-delete the
-// news row — the draft keeps the title, source and link, so the inbox
-// stays clean. Returns { draft } or { error } (Persian, real reason).
-async function makeDraftFromNews(item) {
-  const res = await callWorker('/ai', {
-    task: 'write_post',
-    title: item.title,
-    text: item.description || '',
-    source_url: item.link,
+async function sendScreen(chatId, view) {
+  const sent = await api.sendMessage({
+    chat_id: chatId,
+    text: view.text,
+    ...(view.reply_markup ? { reply_markup: view.reply_markup } : {}),
   });
-  if (!res || res.ok !== true || typeof res.text !== 'string') {
-    return { error: workerErrorMessage(res) || 'نوشتن پست با AI ممکن نشد.' };
-  }
-  const rows = await db
-    .insert(drafts)
-    .values({
-      kind: 'news',
-      title: item.title,
-      body: res.text,
-      media_url: null,
-      source_url: item.link,
-      button_text: 'مشاهده خبر',
-      button_url: item.link,
-      news_item_id: item.id,
-      status: 'draft',
-      publish_at: null,
-      created_at: Date.now(),
-    })
-    .returning()
-    .run();
-  if (!rows || !rows[0]) return { error: 'ساخت پیش‌نویس ممکن نشد.' };
-  await db.delete(news_items).where(eq(news_items.id, item.id)).run();
-  return { draft: rows[0] };
+  return sent?.message_id ?? null;
 }
 
-// Publish a draft now. Returns { messageId } or { error }.
-async function publishDraftNow(draft) {
-  const channel = await getChannel();
-  if (!channel) {
-    return { error: 'کانال تنظیم نشده است. اول بات را در کانال ادمین کنید.' };
-  }
-  const res = await callWorker('/publish', {
-    draft: draftPayload(draft),
-    channel_id: Number(channel.id),
-  });
-  if (!res || res.ok !== true || !res.message_id) {
-    return { error: workerErrorMessage(res) || 'انتشار ممکن نشد. پیش‌نویس دست نخورده باقی ماند.' };
-  }
-  await db.update(drafts).set({ status: 'published' }).where(eq(drafts.id, draft.id)).run();
-  return { messageId: res.message_id, channelId: channel.id };
-}
-
-// Cancel a scheduled draft on the Worker and in the DB.
-// Returns { ok } or { error }.
-async function cancelSchedule(draft) {
-  const res = await callWorker('/schedule/cancel', { draft_id: draft.id });
-  if (!res || res.ok !== true) {
-    return { error: workerErrorMessage(res) || 'لغو زمان‌بندی ممکن نشد.' };
-  }
-  await db
-    .update(drafts)
-    .set({ status: 'draft', publish_at: null })
-    .where(eq(drafts.id, draft.id))
-    .run();
-  return { ok: true };
-}
+// (deliverParts lives in lib/library.js — shared with message.js,
+// which delivers a file after the optional phone prompt.)
 
 export default async function (query, ctx) {
-  const ownerId = query.from?.id;
+  const from = query.from || {};
+  const userId = from.id;
   const queryId = query.id;
   const chatId = query.message?.chat?.id;
   const messageId = query.message?.message_id;
-  if (!isOwner(ownerId)) {
-    try {
-      await api.answerCallbackQuery({ callback_query_id: queryId });
-    } catch {
-      // Silent for non-owners; nothing more to do.
-    }
-    return;
-  }
-  const parts = String(query.data || '').split(':');
+  const data = String(query.data || '');
+  const parts = data.split(':');
   const action = parts[0] + ':' + (parts[1] || '');
   const arg1 = parts[2];
   const arg2 = parts[3];
   const num = (v) => Number(v) || 0;
 
-  // Prev/next at the ends of a group: keep the button, answer with a
-  // short toast and do not change the message. This check runs before
-  // the generic answer below, because a query can only be answered once.
-  if ((action === 'rv:pv' || action === 'rv:nx') && chatId && messageId) {
-    const dir = action === 'rv:nx' ? 1 : -1;
-    const items = itemsForGroup(await listNewItems(), arg1);
-    if (neighborIndex(items, arg2, dir) === -1) {
-      const at = items.findIndex((it) => it.id === num(arg2));
-      if (at !== -1) {
-        try {
-          await api.answerCallbackQuery({
-            callback_query_id: queryId,
-            text: dir === 1 ? 'آخرین خبر است.' : 'اولین خبر است.',
-          });
-        } catch {
-          // Answering failed; nothing more to do.
-        }
-        return;
-      }
-    }
-  }
-
   let answered = false;
   try {
-    await api.answerCallbackQuery({ callback_query_id: queryId });
-    answered = true;
+    await trackUser(from, null);
+    // m:check and fl:dl answer with their own toast text later, so the
+    // generic answer is skipped for them (a query can only be
+    // answered once).
+    if (action !== 'm:check' && action !== 'fl:dl') {
+      await api.answerCallbackQuery({ callback_query_id: queryId });
+      answered = true;
+    }
 
     const show = (view) => editScreen(chatId, messageId, view);
     const showError = (message) => show(errorView(message));
 
+    // --- DB group: delete confirm + cancel pending input (owner only).
+    if (isDbGroup(chatId)) {
+      if (!isOwner(userId)) return;
+      if (action === 'db:dy') {
+        const file = await getFile(arg1);
+        if (file) await deleteFile(file.id);
+        await show({ text: file ? `فایل ${file.id} حذف شد.` : 'فایل پیدا نشد.' });
+        return;
+      }
+      if (action === 'db:dn') {
+        await show({ text: 'لغو شد.' });
+        return;
+      }
+      if (action === 'db:cx') {
+        await deleteSetting(`pending_title:${userId}`);
+        await deleteSetting(`pending_bundle:${userId}`);
+        await deleteSetting(`pending_update:${userId}`);
+        await deleteSetting(`pending_catname:${userId}`);
+        await show({ text: 'لغو شد.' });
+        return;
+      }
+      // Owner picks a category for the pending ingest.
+      if (action === 'db:cat') {
+        const raw = await getSetting(`pending_title:${userId}`);
+        if (!raw) {
+          await show({ text: 'فایلی در انتظار نیست.' });
+          return;
+        }
+        const names = categoryOptions(await listFiles());
+        const name = names[num(arg1)];
+        if (!name) return;
+        const state = JSON.parse(raw);
+        state.category = name;
+        await setSetting(`pending_title:${userId}`, JSON.stringify(state));
+        await show(promptTitleView(names, name, state.mode === 'bundle'));
+        return;
+      }
+      // Owner wants a brand-new category: ask for its name as text.
+      if (action === 'db:catnew') {
+        const raw = await getSetting(`pending_title:${userId}`);
+        if (!raw) {
+          await show({ text: 'فایلی در انتظار نیست.' });
+          return;
+        }
+        await setSetting(`pending_catname:${userId}`, raw);
+        await show({ text: 'نام دسته جدید را بفرستید (یا «لغو» برای برگشت).' });
+        return;
+      }
+      return;
+    }
+
+    // --- Force-join gate for content actions (private chat). ---
+    const needsGate = !(
+      action === 'm:check' ||
+      action === 'sr:cx' ||
+      action === 'db:dy' ||
+      action === 'db:dn' ||
+      action === 'db:cx'
+    );
+    if (needsGate && chatId && !isDbGroup(chatId)) {
+      const check = await checkMembership(userId);
+      if (!membershipPassed(check)) {
+        await trackUser(from, false);
+        await show(joinView(missingMembership(check)));
+        return;
+      }
+      await trackUser(from, true);
+    }
+
     // --- Main menu ---
     if (action === 'm:home') {
-      await show(mainMenuView(await getCounts()));
+      const all = await listFiles();
+      await show(mainMenuView(isOwner(userId), all.length));
       return;
     }
-    if (action === 'm:in') {
-      await show(await inboxMenu());
+    if (action === 'm:check') {
+      const check = await checkMembership(userId);
+      if (membershipPassed(check)) {
+        await trackUser(from, true);
+        await api.answerCallbackQuery({
+          callback_query_id: queryId,
+          text: 'عضویت تایید شد.',
+        });
+        answered = true;
+        const all = await listFiles();
+        await show(mainMenuView(isOwner(userId), all.length));
+      } else {
+        await trackUser(from, false);
+        await api.answerCallbackQuery({
+          callback_query_id: queryId,
+          text: 'هنوز عضو نشدی.',
+        });
+        answered = true;
+        await show(joinView(missingMembership(check)));
+      }
       return;
     }
-    if (action === 'm:dr') {
-      await show(draftsView(await listDrafts(), 0));
+    if (action === 'm:projects') {
+      await show({ text: 'در حال گرفتن پروژه‌ها…' });
+      const res = await getProjects(false);
+      await show(projectsView(res.repos, res.cachedAt, res.liveFailed));
       return;
     }
-    if (action === 'm:sc') {
-      await show(scheduledView(await listScheduled(), 0));
+    if (action === 'gh:ref') {
+      await show({ text: 'در حال گرفتن پروژه‌ها…' });
+      const res = await getProjects(true);
+      await show(projectsView(res.repos, res.cachedAt, res.liveFailed));
       return;
     }
-    if (action === 'm:fd') {
-      await show(feedsView(await listFeeds()));
+    if (action === 'm:socials') {
+      await show(socialsView(SOCIALS));
       return;
     }
-    if (action === 'm:yt') {
-      await show(youtubeView(await listYouTubeDrafts(), 0));
+    if (action === 'm:files') {
+      const all = await listFiles();
+      await show(categoriesView(await listCategories(), all.length));
+      return;
+    }
+    if (action === 'm:search') {
+      await setSetting(`pending_search:${userId}`, `${chatId}:${messageId}`);
+      await show(searchPromptView());
       return;
     }
     if (action === 'm:help') {
       await show(helpView());
       return;
     }
-
-    // --- Review queue ---
-    if (action === 'rv:menu') {
-      await show(await inboxMenu());
-      return;
-    }
-    if (action === 'rv:ft') {
-      await show({ text: 'در حال گرفتن خبرها…' });
-      const result = await fetchNews();
-      if (result.error) {
-        await show(errorView(result.error));
-        return;
-      }
-      await show(await inboxMenu());
-      return;
-    }
-    if (action === 'rv:g') {
-      const items = itemsForGroup(await listNewItems(), arg1);
-      if (items.length === 0) {
-        await show(await inboxMenu());
-        return;
-      }
-      await storeReview(ownerId, arg1, items[0].id);
-      await showReview(chatId, messageId, arg1, items[0].id);
-      return;
-    }
-    if (action === 'rv:nx' || action === 'rv:pv') {
-      const dir = action === 'rv:nx' ? 1 : -1;
-      const items = itemsForGroup(await listNewItems(), arg1);
-      const at = neighborIndex(items, arg2, dir);
-      if (at === -1) {
-        // The item is gone (pruned or confirmed elsewhere): reopen the
-        // group at its first item instead of failing.
-        await showReview(chatId, messageId, arg1, null);
-        return;
-      }
-      await storeReview(ownerId, arg1, items[at].id);
-      await showReview(chatId, messageId, arg1, items[at].id);
-      return;
-    }
-    if (action === 'rv:cf') {
-      const item = await getNewsItem(arg1);
-      if (!item) {
-        await showReview(chatId, messageId, arg1, null);
-        return;
-      }
-      // The next item in this group, computed before the confirm deletes
-      // the current row.
-      const groupItems = itemsForGroup(await listNewItems(), arg1);
-      const at = groupItems.findIndex((it) => it.id === item.id);
-      const next = at !== -1 ? groupItems[at + 1] || null : null;
-      const made = await makeDraftFromNews(item);
-      if (made.error) {
-        await show(errorWithBack(made.error, 'rv:rs'));
-        return;
-      }
-      await storeReview(ownerId, arg1, next ? next.id : null);
-      await show(draftView(made.draft, { resume: true }));
-      return;
-    }
-    if (action === 'rv:rs') {
-      const groupKey = await getSetting(`review_group:${ownerId}`);
-      const itemId = await getSetting(`review_item:${ownerId}`);
-      if (!groupKey) {
-        await show(await inboxMenu());
-        return;
-      }
-      await showReview(chatId, messageId, groupKey, itemId);
+    if (action === 'sr:cx') {
+      await deleteSetting(`pending_search:${userId}`);
+      await deleteSetting(`search_query:${userId}`);
+      const all = await listFiles();
+      await show(mainMenuView(isOwner(userId), all.length));
       return;
     }
 
-    // --- YouTube list ---
-    if (action === 'yt:pg') {
-      await show(youtubeView(await listYouTubeDrafts(), num(arg1)));
+    // --- Owner stats ---
+    if (action === 'm:stats' || action === 'st:home') {
+      if (!isOwner(userId)) {
+        await showError('این بخش فقط برای صاحب بات است.');
+        return;
+      }
+      await show(statsView(await getStatsData()));
+      return;
+    }
+    if (action === 'st:users') {
+      if (!isOwner(userId)) {
+        await showError('این بخش فقط برای صاحب بات است.');
+        return;
+      }
+      await show(statsUsersView(await getStatsUsers(), num(arg1)));
+      return;
+    }
+    if (action === 'st:files') {
+      if (!isOwner(userId)) {
+        await showError('این بخش فقط برای صاحب بات است.');
+        return;
+      }
+      const s = await getStatsData();
+      await show(statsFilesView(s.files, num(arg1), s.perFile));
+      return;
+    }
+    if (action === 'st:u') {
+      if (!isOwner(userId)) {
+        await showError('این بخش فقط برای صاحب بات است.');
+        return;
+      }
+      const allUsers = await getStatsUsers();
+      const user = allUsers.find((u) => String(u.user_id) === String(arg1));
+      if (!user) {
+        await show(statsUsersView(allUsers, 0));
+        return;
+      }
+      const history = await getUserDownloads(user.user_id);
+      await show(statsUserView(user, history));
+      return;
+    }
+    if (action === 'st:f') {
+      if (!isOwner(userId)) {
+        await showError('این بخش فقط برای صاحب بات است.');
+        return;
+      }
+      const model = await getFileViewModel(arg1, null);
+      if (!model) {
+        const s = await getStatsData();
+        await show(statsFilesView(s.files, 0, s.perFile));
+        return;
+      }
+      const count = await countDownloads(arg1, model.view.version);
+      await show(statsFileView(model.view, model.parts, model.versions, count));
       return;
     }
 
-    // --- Drafts ---
-    if (action === 'd:vw') {
-      const draft = await getDraft(arg1);
-      if (!draft) {
-        await show(draftsView(await listDrafts(), 0));
+    // --- Files: categories / browse / search pages / view / version / download ---
+    if (action === 'fl:cat') {
+      const cats = await listCategories();
+      const cat = cats[num(arg1)];
+      if (!cat) {
+        const all = await listFiles();
+        await show(categoriesView(cats, all.length));
         return;
       }
-      await show(draftView(draft));
+      const items = (await listFiles()).filter((f) => (f.category || 'سایر') === cat.name);
+      await show(categoryFilesView(items, 0, num(arg1), cat.name));
       return;
     }
-    if (action === 'dr:pg') {
-      await show(draftsView(await listDrafts(), num(arg1)));
-      return;
-    }
-    if (action === 'd:pub') {
-      const draft = await getDraft(arg1);
-      if (!draft) {
-        await show(draftsView(await listDrafts(), 0));
+    if (action === 'fc:pg') {
+      const cats = await listCategories();
+      const cat = cats[num(arg1)];
+      if (!cat) {
+        const all = await listFiles();
+        await show(categoriesView(cats, all.length));
         return;
       }
-      await show(confirmPublishView(draft));
+      const items = (await listFiles()).filter((f) => (f.category || 'سایر') === cat.name);
+      await show(categoryFilesView(items, num(arg2), num(arg1), cat.name));
       return;
     }
-    if (action === 'd:pc') {
-      const draft = await getDraft(arg1);
-      if (!draft) {
-        await show(draftsView(await listDrafts(), 0));
+    if (action === 'fl:all') {
+      await show(filesView(await listFiles(), 0, null, 'm:files'));
+      return;
+    }
+    if (action === 'fl:pg') {
+      await show(filesView(await listFiles(), num(arg1), null, 'm:files'));
+      return;
+    }
+    if (action === 'sr:pg') {
+      const q = (await getSetting(`search_query:${userId}`)) || '';
+      const results = q ? await searchLibrary(q) : [];
+      await show(filesView(results, num(arg1), q));
+      return;
+    }
+    if (action === 'fl:vw') {
+      const model = await getFileViewModel(arg1, null);
+      if (!model) {
+        const all = await listFiles();
+        await show(categoriesView(await listCategories(), all.length));
         return;
       }
-      const done = await publishDraftNow(draft);
+      const count = await countDownloads(arg1, model.view.version);
+      await show(fileView(model.view, model.parts, model.versions, count));
+      return;
+    }
+    if (action === 'fl:ver') {
+      const model = await getFileViewModel(arg1, num(arg2));
+      if (!model) {
+        const all = await listFiles();
+        await show(categoriesView(await listCategories(), all.length));
+        return;
+      }
+      const count = await countDownloads(arg1, model.view.version);
+      await show(fileView(model.view, model.parts, model.versions, count));
+      return;
+    }
+    if (action === 'fl:dl') {
+      const model = await getFileViewModel(arg1, num(arg2));
+      if (!model) {
+        await api.answerCallbackQuery({ callback_query_id: queryId });
+        answered = true;
+        await showError('فایل پیدا نشد.');
+        return;
+      }
+      // Optional phone, once: if the user has never shared a phone,
+      // offer the native share-contact button + a skip button. The
+      // file is delivered either way — this never blocks delivery.
+      const userRow = await getUser(userId);
+      if (needsPhonePrompt(userRow)) {
+        await setSetting(
+          `pending_delivery:${userId}`,
+          JSON.stringify({ fileId: arg1, version: model.view.version }),
+        );
+        await api.sendMessage({
+          chat_id: chatId,
+          text:
+            'اگر دوست داری شماره‌ات را هم برای من بفرستی، دکمه زیر را بزن — کاملاً اختیاری است.\n' +
+            'اگر نمی‌خواهی، «ادامه بدون شماره» را بزن. فایل در هر صورت فرستاده می‌شود.',
+          reply_markup: {
+            keyboard: [
+              [{ text: '📱 ارسال شماره تلفن (اختیاری)', request_contact: true }],
+              [{ text: 'ادامه بدون شماره' }],
+            ],
+            one_time_keyboard: true,
+            resize_keyboard: true,
+          },
+        });
+        await api.answerCallbackQuery({ callback_query_id: queryId });
+        answered = true;
+        return;
+      }
+      const done = await deliverParts(chatId, model.view, model.view.version, model.parts, from, false);
       if (done.error) {
-        await show(errorWithBack(done.error, `d:vw:${draft.id}`));
+        await api.answerCallbackQuery({ callback_query_id: queryId });
+        answered = true;
+        await showError(done.error);
         return;
       }
-      const link = channelMessageLink(done.channelId, done.messageId);
-      await show({
-        text: 'منتشر شد.' + (link ? '\n' + link : ''),
-        reply_markup: {
-          inline_keyboard: [[{ text: 'منوی اصلی', callback_data: 'm:home' }]],
-        },
+      await api.answerCallbackQuery({
+        callback_query_id: queryId,
+        text: 'فرستاده شد.',
       });
-      return;
-    }
-    if (action === 'd:cx') {
-      const draft = await getDraft(arg1);
-      if (!draft) {
-        await show(draftsView(await listDrafts(), 0));
-        return;
-      }
-      await show(draftView(draft));
-      return;
-    }
-    if (action === 'd:ed') {
-      const draft = await getDraft(arg1);
-      if (!draft) {
-        await show(draftsView(await listDrafts(), 0));
-        return;
-      }
-      await setSetting(`editing_draft:${ownerId}`, String(draft.id));
-      await setSetting(`editing_draft_msg:${ownerId}`, `${chatId}:${messageId}`);
-      await show(promptEditView(draft));
-      return;
-    }
-    if (action === 'd:ec') {
-      await deleteSetting(`editing_draft:${ownerId}`);
-      await deleteSetting(`editing_draft_msg:${ownerId}`);
-      const draft = await getDraft(arg1);
-      if (!draft) {
-        await show(draftsView(await listDrafts(), 0));
-        return;
-      }
-      await show(draftView(draft));
-      return;
-    }
-    if (action === 'd:rw' || action === 'd:sh') {
-      const draft = await getDraft(arg1);
-      if (!draft) {
-        await show(draftsView(await listDrafts(), 0));
-        return;
-      }
-      const res = await callWorker('/ai', {
-        task: action === 'd:rw' ? 'rewrite' : 'shorten',
-        title: draft.title,
-        text: draft.body,
-      });
-      if (!res || res.ok !== true || typeof res.text !== 'string') {
-        await show(errorWithBack(workerErrorMessage(res) || 'بازنویسی ممکن نشد.', `d:vw:${draft.id}`));
-        return;
-      }
-      await db.update(drafts).set({ body: res.text }).where(eq(drafts.id, draft.id)).run();
-      const updated = (await getDraft(draft.id)) || { ...draft, body: res.text };
-      await show(draftView(updated));
-      return;
-    }
-    if (action === 'd:sc') {
-      const draft = await getDraft(arg1);
-      if (!draft) {
-        await show(draftsView(await listDrafts(), 0));
-        return;
-      }
-      await setSetting(`scheduling_draft:${ownerId}`, String(draft.id));
-      await setSetting(`scheduling_draft_msg:${ownerId}`, `${chatId}:${messageId}`);
-      await show(promptScheduleView(draft));
-      return;
-    }
-    if (action === 'd:sx') {
-      await deleteSetting(`scheduling_draft:${ownerId}`);
-      await deleteSetting(`scheduling_draft_msg:${ownerId}`);
-      const draft = await getDraft(arg1);
-      if (!draft) {
-        await show(draftsView(await listDrafts(), 0));
-        return;
-      }
-      await show(draftView(draft));
-      return;
-    }
-    if (action === 'd:del') {
-      const draft = await getDraft(arg1);
-      if (draft && draft.status === 'scheduled') {
-        // Cancel the queued KV entry first so Cron cannot publish a
-        // draft that no longer exists.
-        await callWorker('/schedule/cancel', { draft_id: draft.id });
-      }
-      await db.delete(drafts).where(eq(drafts.id, num(arg1))).run();
-      await show(draftsView(await listDrafts(), 0));
-      return;
-    }
-    if (action === 'd:cs') {
-      const draft = await getDraft(arg1);
-      if (!draft) {
-        await show(scheduledView(await listScheduled(), 0));
-        return;
-      }
-      const cancelled = await cancelSchedule(draft);
-      if (cancelled.error) {
-        await show(errorWithBack(cancelled.error, `d:vw:${draft.id}`));
-        return;
-      }
-      const updated = (await getDraft(draft.id)) || { ...draft, status: 'draft', publish_at: null };
-      await show(draftView(updated));
-      return;
-    }
-
-    // --- Scheduled list ---
-    if (action === 'sc:pg') {
-      await show(scheduledView(await listScheduled(), num(arg1)));
-      return;
-    }
-    if (action === 'sc:cx') {
-      const draft = await getDraft(arg1);
-      if (draft) {
-        const cancelled = await cancelSchedule(draft);
-        if (cancelled.error) {
-          await show(errorWithBack(cancelled.error, `sc:pg:${num(arg2)}`));
-          return;
-        }
-      }
-      await show(scheduledView(await listScheduled(), num(arg2)));
-      return;
-    }
-
-    // --- Feeds ---
-    if (action === 'f:tg') {
-      const feed = await getFeed(arg1);
-      if (feed) {
-        await db
-          .update(rss_feeds)
-          .set({ active: feed.active !== 0 ? 0 : 1 })
-          .where(eq(rss_feeds.id, feed.id))
-          .run();
-      }
-      await show(feedsView(await listFeeds()));
-      return;
-    }
-    if (action === 'f:del') {
-      await db.delete(rss_feeds).where(eq(rss_feeds.id, num(arg1))).run();
-      await show(feedsView(await listFeeds()));
-      return;
-    }
-    if (action === 'f:add') {
-      await setSetting(`adding_feed:${ownerId}`, 'url');
-      await setSetting(`adding_feed_msg:${ownerId}`, `${chatId}:${messageId}`);
-      await show(promptFeedUrlView());
-      return;
-    }
-    if (action === 'f:ax') {
-      await deleteSetting(`adding_feed:${ownerId}`);
-      await deleteSetting(`adding_feed_msg:${ownerId}`);
-      await deleteSetting(`adding_feed_url:${ownerId}`);
-      await show(feedsView(await listFeeds()));
-      return;
-    }
-    if (action === 'f:nn') {
-      const url = await getSetting(`adding_feed_url:${ownerId}`);
-      await deleteSetting(`adding_feed:${ownerId}`);
-      await deleteSetting(`adding_feed_msg:${ownerId}`);
-      await deleteSetting(`adding_feed_url:${ownerId}`);
-      if (url) {
-        const existing = await db.select().from(rss_feeds).where(eq(rss_feeds.url, url)).get();
-        if (!existing) {
-          await db
-            .insert(rss_feeds)
-            .values({ url, name: null, active: 1, created_at: Date.now() })
-            .run();
-        }
-      }
-      await show(feedsView(await listFeeds()));
-      return;
-    }
-
-    // --- Clear inbox ---
-    if (action === 'cl:yes') {
-      const rows = await db.select().from(news_items).all();
-      let removed = 0;
-      for (const row of rows) {
-        if (row.status === 'new' || row.status === 'discarded') {
-          await db.delete(news_items).where(eq(news_items.id, row.id)).run();
-          removed += 1;
-        }
-      }
-      await show({
-        text: `${removed} خبر حذف شد.`,
-        reply_markup: {
-          inline_keyboard: [[{ text: 'منوی اصلی', callback_data: 'm:home' }]],
-        },
-      });
-      return;
-    }
-    if (action === 'cl:no') {
-      await show(mainMenuView(await getCounts()));
+      answered = true;
       return;
     }
   } catch (err) {
@@ -566,11 +414,7 @@ export default async function (query, ctx) {
           text: 'خطایی رخ داد.',
         });
       } else if (chatId && messageId) {
-        await editScreen(
-          chatId,
-          messageId,
-          errorView('خطایی رخ داد: ' + (err?.message || 'نامشخص')),
-        );
+        await editScreen(chatId, messageId, errorView('خطایی رخ داد: ' + (err?.message || 'نامشخص')));
       }
     } catch {
       // The fallback itself failed; nothing more to do.

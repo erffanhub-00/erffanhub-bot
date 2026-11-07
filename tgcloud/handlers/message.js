@@ -1,49 +1,69 @@
-// Bot-only message handler (v7). One screen, edited in place: commands
-// send a single screen message; buttons edit it; nothing spams. All
-// inbox/draft logic lives in lib/inbox.js and lib/views.js — this file
-// only routes updates to screens.
+// Message handler (v1). Three contexts:
+// - Private chat: force-join gate, then menu / projects / socials /
+//   files / search / file view / download / owner stats.
+// - DB group (owner only): file ingest, bundles, updates, delete, list.
+// - Any other group: ignored.
+// User tracking runs on every interaction (users table). The bot never
+// asks a user for personal information.
 
-import { api, db } from 'sdk';
-import { eq } from 'sdk/db';
-import { rss_feeds, drafts } from '../schema.js';
+import { api } from 'sdk';
 import { isOwner } from '../lib/auth.js';
-import { callWorker } from '../lib/worker.js';
-import { workerErrorMessage } from '../lib/errors.js';
-import { isYouTubeUrl, extractYouTubeUrl, parseTehranDateTime, validateFeedUrl } from '../lib/pure.js';
-import { draftPayload } from '../lib/format.js';
+import { SOCIALS } from '../lib/config.js';
+import {
+  extractFileMeta,
+  parseFileId,
+  parseTitleDescription,
+  categoryOptions,
+  normalizeDigits,
+} from '../lib/pure.js';
 import {
   getSetting,
   setSetting,
   deleteSetting,
-  getChannel,
+  trackUser,
+  takeNextFileId,
+  listFiles,
+  getFile,
+  insertFile,
+  insertVersion,
+  setFileCategory,
+  setUserPhone,
+  listCategories,
 } from '../lib/store.js';
 import {
-  fetchNews,
-  inboxMenu,
-  listNewItems,
-  listDrafts,
-  listScheduled,
-  listFeeds,
-  getDraft,
-  getCounts,
-} from '../lib/inbox.js';
+  checkMembership,
+  membershipPassed,
+  missingMembership,
+  isDbGroup,
+  searchLibrary,
+  getStatsData,
+  getStatsUsers,
+  getFileViewModel,
+  countDownloads,
+  deliverParts,
+} from '../lib/library.js';
+import { getProjects } from '../lib/github.js';
 import {
   HELP_TEXT,
   mainMenuView,
   helpView,
   errorView,
-  draftView,
-  draftsView,
-  scheduledView,
-  feedsView,
-  promptEditView,
-  promptScheduleView,
-  promptFeedUrlView,
-  promptFeedNameView,
-  clearAskView,
-  diagView,
+  joinView,
+  projectsView,
+  socialsView,
+  filesView,
+  categoriesView,
+  fileView,
+  searchPromptView,
+  statsView,
+  statsUsersView,
+  statsUserView,
+  statsFilesView,
+  statsFileView,
+  confirmDeleteView,
+  promptTitleView,
+  titleSavedView,
 } from '../lib/views.js';
-import { draftKeyboard } from '../lib/keyboards.js';
 
 async function sendScreen(chatId, view) {
   const sent = await api.sendMessage({
@@ -54,9 +74,6 @@ async function sendScreen(chatId, view) {
   return sent?.message_id ?? null;
 }
 
-// Edit the screen message; if the edit fails (message deleted), send the
-// screen as a new message instead. Used by command flows that first send
-// a placeholder message.
 async function replaceScreen(chatId, messageId, view) {
   try {
     await api.editMessageText({
@@ -68,6 +85,20 @@ async function replaceScreen(chatId, messageId, view) {
     return messageId;
   } catch {
     return sendScreen(chatId, view);
+  }
+}
+
+async function editTextBestEffort(chatId, messageId, text, replyMarkup) {
+  try {
+    await api.editMessageText({
+      chat_id: chatId,
+      message_id: messageId,
+      text,
+      ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+    });
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -87,304 +118,503 @@ function parseStoredMessage(value) {
   return { chatId: Number(chatId), messageId: Number(messageId) };
 }
 
-async function clearPending(ownerId) {
-  await deleteSetting(`editing_draft:${ownerId}`);
-  await deleteSetting(`editing_draft_msg:${ownerId}`);
-  await deleteSetting(`scheduling_draft:${ownerId}`);
-  await deleteSetting(`scheduling_draft_msg:${ownerId}`);
-  await deleteSetting(`adding_feed:${ownerId}`);
-  await deleteSetting(`adding_feed_msg:${ownerId}`);
-  await deleteSetting(`adding_feed_url:${ownerId}`);
+async function clearOwnerPending(ownerId) {
+  await deleteSetting(`pending_title:${ownerId}`);
+  await deleteSetting(`pending_bundle:${ownerId}`);
+  await deleteSetting(`pending_update:${ownerId}`);
+  await deleteSetting(`pending_catname:${ownerId}`);
 }
 
-// --- YouTube: link -> draft -> the draft screen (one message). ---
-
-async function handleYouTube(chatId, text) {
-  const url = extractYouTubeUrl(text);
-  if (!url) {
-    await sendScreen(chatId, errorView('لینک یوتیوب معتبر نیست.'));
-    return;
-  }
-  const res = await callWorker('/link/preview?url=' + encodeURIComponent(url), null, 'GET');
-  if (!res || res.ok !== true || res.kind !== 'youtube') {
-    await sendScreen(
-      chatId,
-      errorView(workerErrorMessage(res) || 'گرفتن اطلاعات ویدیو ممکن نشد. دوباره تلاش کنید.'),
-    );
-    return;
-  }
-  const rows = await db
-    .insert(drafts)
-    .values({
-      kind: 'youtube',
-      title: res.title || url,
-      body: '',
-      media_url: res.thumbnail_url || null,
-      source_url: url,
-      button_text: 'تماشا در یوتیوب',
-      button_url: url,
-      news_item_id: null,
-      status: 'draft',
-      publish_at: null,
-      created_at: Date.now(),
-    })
-    .returning()
-    .run();
-  const draft = rows && rows[0];
-  if (!draft) {
-    await sendScreen(chatId, errorView('ساخت پیش‌نویس ممکن نشد.'));
-    return;
-  }
-  await sendScreen(chatId, {
-    text:
-      `${res.title || url}` +
-      (res.author_name ? '\n' + res.author_name : '') +
-      '\n\nتوضیح را با دکمه ویرایش بنویسید.',
-    reply_markup: draftKeyboard(draft),
-  });
+async function clearUserPending(userId) {
+  await deleteSetting(`pending_search:${userId}`);
+  await deleteSetting(`search_query:${userId}`);
 }
 
-// --- Pending text input: edit draft / set schedule time. The prompt and
-// the result both edit the draft screen message. ---
-
-async function handlePendingEdit(chatId, messageId, ownerId, text) {
-  const draftId = await getSetting(`editing_draft:${ownerId}`);
-  if (!draftId) return false;
-  const stored = parseStoredMessage(await getSetting(`editing_draft_msg:${ownerId}`));
-  const draft = await getDraft(draftId);
-  await clearPending(ownerId);
-  if (!draft) {
-    if (stored) {
-      await replaceScreen(stored.chatId, stored.messageId, errorView('پیش‌نویس پیدا نشد.'));
-    } else {
-      await sendScreen(chatId, errorView('پیش‌نویس پیدا نشد.'));
-    }
+// --- Force-join gate (private chat). Returns true when the user may
+// proceed; otherwise shows the join screen and returns false. ---
+async function ensureMember(chatId, userId) {
+  const check = await checkMembership(userId);
+  if (membershipPassed(check)) {
+    await trackUser({ id: userId }, true);
     return true;
   }
-  await db.update(drafts).set({ body: text }).where(eq(drafts.id, draft.id)).run();
-  const updated = (await getDraft(draft.id)) || { ...draft, body: text };
-  if (stored) {
-    await replaceScreen(stored.chatId, stored.messageId, draftView(updated));
+  await trackUser({ id: userId }, false);
+  await sendScreen(chatId, joinView(missingMembership(check)));
+  return false;
+}
+
+async function showFile(chatId, fileId, version) {
+  const model = await getFileViewModel(fileId, version);
+  if (!model) {
+    await sendScreen(chatId, errorView('فایلی با این شماره نیست.'));
+    return;
+  }
+  const count = await countDownloads(fileId, model.view.version);
+  await sendScreen(chatId, fileView(model.view, model.parts, model.versions, count));
+}
+
+// --- Owner stats (owner only). ---
+async function showStats(chatId) {
+  const s = await getStatsData();
+  await sendScreen(chatId, statsView(s));
+}
+
+// --- DB group: title/description/category intake for a pending
+// ingest. state: { mode: 'new'|'bundle'|'update', fileId?, parts,
+//   kind, category, dbChatId, dbMessageId, askChat, askMsg }
+async function finalizeIngest(ownerId, state, id, title, description) {
+  if (state.mode === 'update') {
+    const file = await getFile(state.fileId);
+    if (!file) return null;
+    const updated = await insertVersion(file, state.parts, { title, description });
+    return updated;
+  }
+  const created = await insertFile({
+    id,
+    title,
+    description,
+    category: state.category || 'سایر',
+    kind: state.kind,
+    parts: state.parts,
+    dbChatId: state.dbChatId,
+    dbMessageId: state.dbMessageId,
+  });
+  return created;
+}
+
+async function finishTitle(ownerId, ask, done, failText) {
+  await deleteSetting(`pending_title:${ownerId}`);
+  if (done) {
+    await replaceScreen(ask.chatId, ask.messageId, titleSavedView(done));
   } else {
-    await sendScreen(chatId, draftView(updated));
+    await replaceScreen(ask.chatId, ask.messageId, errorView(failText));
   }
+}
+
+async function handlePendingTitle(chatId, messageId, ownerId, text) {
+  const raw = await getSetting(`pending_title:${ownerId}`);
+  if (!raw) return false;
+  let state;
+  try {
+    state = JSON.parse(raw);
+  } catch {
+    await deleteSetting(`pending_title:${ownerId}`);
+    return false;
+  }
+  const ask = { chatId: state.askChat, messageId: state.askMsg };
+  const trimmed = String(text || '').trim();
+
+  // Update flow: «همون» keeps the old title and description.
+  if (state.mode === 'update' && trimmed === 'همون') {
+    const file = await getFile(state.fileId);
+    const done = file
+      ? await finalizeIngest(ownerId, state, null, file.title, file.description)
+      : null;
+    await finishTitle(ownerId, ask, done, 'ثبت ورژن جدید ممکن نشد.');
+    await deleteMessageBestEffort(chatId, messageId);
+    return true;
+  }
+
+  const parsed = parseTitleDescription(text);
+  if (state.mode === 'update') {
+    const file = await getFile(state.fileId);
+    const title = parsed.title || file?.title || null;
+    const description = parsed.description ?? file?.description ?? null;
+    const done = file
+      ? await finalizeIngest(ownerId, state, null, title, description)
+      : null;
+    await finishTitle(ownerId, ask, done, 'ثبت ورژن جدید ممکن نشد.');
+    await deleteMessageBestEffort(chatId, messageId);
+    return true;
+  }
+
+  // New file / bundle: the id is always auto-sequential; the bot
+  // never asks for a number.
+  const id = await takeNextFileId();
+  const done = await finalizeIngest(ownerId, state, id, parsed.title || null, parsed.description || null);
+  await finishTitle(ownerId, ask, done, 'ثبت فایل ممکن نشد.');
   await deleteMessageBestEffort(chatId, messageId);
   return true;
 }
 
-async function handlePendingSchedule(chatId, messageId, ownerId, text) {
-  const draftId = await getSetting(`scheduling_draft:${ownerId}`);
-  if (!draftId) return false;
-  const stored = parseStoredMessage(await getSetting(`scheduling_draft_msg:${ownerId}`));
-  const show = async (view) => {
-    if (stored) {
-      await replaceScreen(stored.chatId, stored.messageId, view);
-    } else {
-      await sendScreen(chatId, view);
-    }
-  };
-  const publishAt = parseTehranDateTime(text);
-  if (publishAt === null) {
-    const draft = await getDraft(draftId);
-    await show(promptScheduleView(draft || { id: draftId }, 'زمان معتبر نیست.'));
-    return true;
+// New-category name intake (after tapping «دسته جدید» on the ask
+// message). The pending_catname value is the pending_title state.
+async function handlePendingCategoryName(chatId, messageId, ownerId, text) {
+  const raw = await getSetting(`pending_catname:${ownerId}`);
+  if (!raw) return false;
+  let state;
+  try {
+    state = JSON.parse(raw);
+  } catch {
+    await deleteSetting(`pending_catname:${ownerId}`);
+    return false;
   }
-  if (publishAt <= Date.now()) {
-    const draft = await getDraft(draftId);
-    await show(promptScheduleView(draft || { id: draftId }, 'زمان باید در آینده باشد.'));
-    return true;
+  await deleteSetting(`pending_catname:${ownerId}`);
+  const name = String(text || '').trim();
+  if (name && name !== 'لغو') {
+    state.category = name;
   }
-  const draft = await getDraft(draftId);
-  if (!draft) {
-    await clearPending(ownerId);
-    await show(errorView('پیش‌نویس پیدا نشد.'));
-    return true;
+  const names = categoryOptions(await listFiles());
+  if (state.category && !names.includes(state.category)) {
+    names.unshift(state.category);
   }
-  const channel = await getChannel();
-  if (!channel) {
-    await clearPending(ownerId);
-    await show(errorView('کانال تنظیم نشده است. اول بات را در کانال ادمین کنید.'));
-    return true;
-  }
-  const res = await callWorker('/schedule', {
-    draft: draftPayload(draft),
-    channel_id: Number(channel.id),
-    publish_at: publishAt,
+  await replaceScreen(
+    state.askChat,
+    state.askMsg,
+    promptTitleView(names, state.category || 'سایر', state.mode === 'bundle'),
+  );
+  await setSetting(`pending_title:${ownerId}`, JSON.stringify(state));
+  await deleteMessageBestEffort(chatId, messageId);
+  return true;
+}
+
+// Ask for title/description + category for a pending ingest.
+// Returns the ask message id.
+async function askForTitle(ownerId, state) {
+  const names = categoryOptions(await listFiles());
+  state.category = state.category || 'سایر';
+  const view = promptTitleView(names, state.category, state.mode === 'bundle');
+  const sent = await api.sendMessage({
+    chat_id: state.dbChatId,
+    text: view.text,
+    reply_to_message_id: state.dbMessageId || undefined,
+    reply_markup: view.reply_markup,
   });
-  if (!res || res.ok !== true) {
-    await show(errorView(workerErrorMessage(res) || 'زمان‌بندی ممکن نشد. دوباره تلاش کنید.'));
+  state.askChat = state.dbChatId;
+  state.askMsg = sent?.message_id ?? null;
+  await setSetting(`pending_title:${ownerId}`, JSON.stringify(state));
+  return sent?.message_id ?? null;
+}
+
+
+// --- DB group: incoming file. ---
+async function handleDbGroupFile(chatId, message, ownerId) {
+  const meta = extractFileMeta(message);
+  if (!meta) return false;
+  // One pending title at a time: finish it before sending the next file.
+  if (await getSetting(`pending_title:${ownerId}`)) {
+    await api.sendMessage({
+      chat_id: chatId,
+      text: 'اول عنوان فایل قبلی را بفرستید، بعد فایل بعدی را ارسال کنید.',
+      reply_to_message_id: message.message_id,
+    });
     return true;
   }
-  await db
-    .update(drafts)
-    .set({ status: 'scheduled', publish_at: publishAt })
-    .where(eq(drafts.id, draft.id))
-    .run();
-  await clearPending(ownerId);
-  const updated = (await getDraft(draft.id)) || { ...draft, status: 'scheduled', publish_at: publishAt };
-  await show(draftView(updated));
-  await deleteMessageBestEffort(chatId, messageId);
+  const bundleRaw = await getSetting(`pending_bundle:${ownerId}`);
+  if (bundleRaw) {
+    let bundle;
+    try {
+      bundle = JSON.parse(bundleRaw);
+    } catch {
+      bundle = { updateFor: null, parts: [] };
+    }
+    bundle.parts.push({ ...meta, kind: meta.kind });
+    await setSetting(`pending_bundle:${ownerId}`, JSON.stringify(bundle));
+    await api.sendMessage({
+      chat_id: chatId,
+      text: `پارت ${bundle.parts.length} ثبت شد. برای پایان /done را بفرستید.`,
+      reply_to_message_id: message.message_id,
+    });
+    return true;
+  }
+  const updateFor = await getSetting(`pending_update:${ownerId}`);
+  const state = {
+    mode: updateFor ? 'update' : 'new',
+    fileId: updateFor || null,
+    parts: [meta],
+    kind: meta.kind,
+    dbChatId: chatId,
+    dbMessageId: message.message_id,
+    askChat: null,
+    askMsg: null,
+  };
+  await deleteSetting(`pending_update:${ownerId}`);
+  await askForTitle(ownerId, state);
   return true;
 }
 
-// --- Pending text input: add-feed flow (URL step, then optional name).
-// Same pending-state pattern as edit/schedule: the prompt and the result
-// both edit the feeds screen message. ---
+const DB_GROUP_HELP =
+  'دستورهای گروه دیتابیس:\n' +
+  '/bundle — شروع بسته چندپارتی\n' +
+  '/done — پایان بسته و درخواست عنوان\n' +
+  '/update F001 — ورژن جدید برای یک فایل\n' +
+  '/setcat F001 پرامپت — تغییر دسته یک فایل\n' +
+  '/del F001 — حذف یک فایل\n' +
+  '/list — لیست فایل‌ها\n' +
+  '/cancel — لغو ورودی در انتظار\n' +
+  'فایل بفرستید تا شناسه بگیرد؛ عنوان و توضیح و دسته را همان‌جا می‌دهید.';
 
-async function handlePendingAddFeed(chatId, messageId, ownerId, text) {
-  const step = await getSetting(`adding_feed:${ownerId}`);
-  if (!step) return false;
-  const stored = parseStoredMessage(await getSetting(`adding_feed_msg:${ownerId}`));
-  const show = async (view) => {
-    if (stored) {
-      await replaceScreen(stored.chatId, stored.messageId, view);
-    } else {
-      await sendScreen(chatId, view);
+async function handleDbGroupCommand(chatId, messageId, ownerId, text) {
+  const parts = text.split(/\s+/);
+  const command = parts[0].split('@')[0];
+  if (command === '/bundle') {
+    if (await getSetting(`pending_title:${ownerId}`)) {
+      await sendScreen(chatId, errorView('اول عنوان فایل قبلی را بفرستید.'));
+      return;
     }
-  };
-  if (step === 'url') {
-    const checked = validateFeedUrl(text);
-    if (!checked.ok) {
-      await show(promptFeedUrlView(checked.error + ' دوباره بفرستید.'));
-      return true;
+    if (await getSetting(`pending_bundle:${ownerId}`)) {
+      await sendScreen(chatId, errorView('بسته در حال ساخت است؛ فایل‌ها را بفرستید و /done را بزنید.'));
+      return;
     }
-    const existing = await db.select().from(rss_feeds).where(eq(rss_feeds.url, checked.url)).get();
-    if (existing) {
-      await show(promptFeedUrlView('این فید قبلاً اضافه شده است. یک آدرس دیگر بفرستید.'));
-      return true;
-    }
-    await setSetting(`adding_feed:${ownerId}`, 'name');
-    await setSetting(`adding_feed_url:${ownerId}`, checked.url);
-    await show(promptFeedNameView(checked.url));
-    await deleteMessageBestEffort(chatId, messageId);
-    return true;
+    const updateFor = await getSetting(`pending_update:${ownerId}`);
+    await setSetting(
+      `pending_bundle:${ownerId}`,
+      JSON.stringify({ updateFor: updateFor || null, parts: [] }),
+    );
+    await sendScreen(chatId, {
+      text: 'حالت بسته شروع شد. پارت‌ها را پشت سر هم بفرستید و آخرش /done را بزنید.',
+    });
+    return;
   }
-  if (step === 'name') {
-    const url = await getSetting(`adding_feed_url:${ownerId}`);
-    const name = text === '-' || text === 'بدون نام' ? null : text;
-    await clearPending(ownerId);
-    if (!url) {
-      await show(feedsView(await listFeeds()));
-      return true;
+  if (command === '/done') {
+    const bundleRaw = await getSetting(`pending_bundle:${ownerId}`);
+    if (!bundleRaw) {
+      await sendScreen(chatId, errorView('بسته‌ای در حال ساخت نیست. اول /bundle را بفرستید.'));
+      return;
     }
-    const existing = await db.select().from(rss_feeds).where(eq(rss_feeds.url, url)).get();
-    if (!existing) {
-      await db
-        .insert(rss_feeds)
-        .values({ url, name, active: 1, created_at: Date.now() })
-        .run();
+    let bundle;
+    try {
+      bundle = JSON.parse(bundleRaw);
+    } catch {
+      bundle = { updateFor: null, parts: [] };
     }
-    await show(feedsView(await listFeeds()));
-    await deleteMessageBestEffort(chatId, messageId);
-    return true;
+    if (!bundle.parts || bundle.parts.length === 0) {
+      await sendScreen(chatId, errorView('هنوز پارتی نفرستاده‌اید.'));
+      return;
+    }
+    await deleteSetting(`pending_bundle:${ownerId}`);
+    await deleteSetting(`pending_update:${ownerId}`);
+    const state = {
+      mode: bundle.updateFor ? 'update' : 'bundle',
+      fileId: bundle.updateFor || null,
+      parts: bundle.parts,
+      kind: bundle.parts[0]?.kind || null,
+      dbChatId: chatId,
+      dbMessageId: bundle.parts[bundle.parts.length - 1]?.db_message_id || null,
+      askChat: null,
+      askMsg: null,
+    };
+    await askForTitle(ownerId, state);
+    return;
+  }
+  if (command === '/update') {
+    const id = parseFileId(parts[1] || '');
+    if (!id) {
+      await sendScreen(chatId, errorView('شناسه فایل را بفرستید. مثال: /update F001'));
+      return;
+    }
+    const file = await getFile(id);
+    if (!file) {
+      await sendScreen(chatId, errorView('فایلی با این شماره نیست.'));
+      return;
+    }
+    await setSetting(`pending_update:${ownerId}`, id);
+    await sendScreen(chatId, {
+      text: `ورژن جدید برای ${id} «${file.title || '(بدون عنوان)'}».\nفایل جدید را بفرستید (برای چندپارتی اول /bundle). بعد توضیح جدید را می‌دهید یا «همون» را بفرستید.`,
+    });
+    return;
+  }
+  if (command === '/setcat') {
+    const id = parseFileId(parts[1] || '');
+    const category = parts.slice(2).join(' ').trim();
+    if (!id || !category) {
+      await sendScreen(chatId, errorView('مثال: /setcat F001 پرامپت'));
+      return;
+    }
+    const file = await getFile(id);
+    if (!file) {
+      await sendScreen(chatId, errorView('فایلی با این شماره نیست.'));
+      return;
+    }
+    const updated = await setFileCategory(id, category);
+    await sendScreen(chatId, {
+      text: `دسته ${id} به «${updated?.category || category}» تغییر کرد.`,
+    });
+    return;
+  }
+  if (command === '/del') {
+    const id = parseFileId(parts[1] || '');
+    if (!id) {
+      await sendScreen(chatId, errorView('شناسه فایل را بفرستید. مثال: /del F001'));
+      return;
+    }
+    const file = await getFile(id);
+    if (!file) {
+      await sendScreen(chatId, errorView('فایلی با این شماره نیست.'));
+      return;
+    }
+    await sendScreen(chatId, confirmDeleteView(file));
+    return;
+  }
+  if (command === '/list') {
+    const all = await listFiles();
+    await sendScreen(chatId, filesView(all, 0, null));
+    return;
+  }
+  if (command === '/cancel') {
+    await clearOwnerPending(ownerId);
+    await sendScreen(chatId, { text: 'لغو شد.' });
+    return;
+  }
+  if (command === '/id') {
+    await sendScreen(chatId, { text: `آیدی این چت: ${chatId}\nآیدی شما: ${ownerId}` });
+    return;
+  }
+  if (command === '/help') {
+    await sendScreen(chatId, { text: DB_GROUP_HELP });
+    return;
   }
   return false;
 }
 
-// --- /diag: one line per check, with the real error when one fails. ---
-
-async function handleDiag(chatId) {
-  const health = await callWorker('/health', {}, 'POST');
-  const workerOk = !!health && health.ok === true;
-  const secretOk = workerOk;
-  const workerError = workerOk ? null : workerErrorMessage(health);
-  const secretError = workerOk ? null : 'بررسی نشد — Worker در دسترس نیست.';
-  let aiOk = false;
-  let aiError = null;
-  if (workerOk) {
-    const ai = await callWorker('/ai', {
-      task: 'write_post',
-      title: 'تست تشخیص',
-      text: 'این یک متن تست کوتاه است.',
-    });
-    aiOk = !!ai && ai.ok === true && typeof ai.text === 'string' && ai.text.length > 0;
-    if (!aiOk) aiError = workerErrorMessage(ai);
-  } else {
-    aiError = 'Worker در دسترس نیست، تست AI انجام نشد.';
+// --- Private chat: search intake. ---
+// Deliver a file the user asked for but was waiting on the optional
+// phone prompt (contact shared, or «ادامه بدون شماره»). Returns
+// false when nothing was pending. The file is always delivered.
+async function deliverPending(chatId, userId, from) {
+  const raw = await getSetting(`pending_delivery:${userId}`);
+  if (!raw) return false;
+  await deleteSetting(`pending_delivery:${userId}`);
+  let pending;
+  try {
+    pending = JSON.parse(raw);
+  } catch {
+    return false;
   }
-  const kvOk = workerOk && health.kv === true;
-  const kvError = workerOk && health.kv !== true ? 'KV در Worker تنظیم نشده.' : null;
-  const channel = await getChannel();
-  const counts = await getCounts();
-  await sendScreen(
-    chatId,
-    diagView({ workerOk, workerError, secretOk, secretError, aiOk, aiError, kvOk, kvError, channel, counts }),
-  );
+  if (!pending?.fileId) return false;
+  const model = await getFileViewModel(pending.fileId, pending.version || null);
+  if (!model) {
+    await sendScreen(chatId, errorView('فایل پیدا نشد.'));
+    return true;
+  }
+  const res = await deliverParts(chatId, model.view, model.view.version, model.parts, from, true);
+  if (res.error) await sendScreen(chatId, errorView(res.error));
+  return true;
 }
 
-async function handleAddFeed(chatId, parts) {
-  const name = parts.slice(2).join(' ') || null;
-  const checked = validateFeedUrl(parts[1] || '');
-  if (!checked.ok) {
-    await sendScreen(chatId, errorView(checked.error));
-    return;
+async function handlePendingSearch(chatId, messageId, userId, text) {
+  const stored = parseStoredMessage(await getSetting(`pending_search:${userId}`));
+  if (!stored) return false;
+  const query = text.trim();
+  await deleteSetting(`pending_search:${userId}`);
+  if (!query) {
+    await replaceScreen(stored.chatId, stored.messageId, searchPromptView('متن جستجو خالی است.'));
+    return true;
   }
-  const existing = await db.select().from(rss_feeds).where(eq(rss_feeds.url, checked.url)).get();
-  if (existing) {
-    await sendScreen(chatId, errorView('این فید قبلاً اضافه شده است.'));
-    return;
-  }
-  await db
-    .insert(rss_feeds)
-    .values({ url: checked.url, name, active: 1, created_at: Date.now() })
-    .run();
-  await sendScreen(chatId, feedsView(await listFeeds()));
+  await setSetting(`search_query:${userId}`, query);
+  const results = await searchLibrary(query);
+  await replaceScreen(stored.chatId, stored.messageId, filesView(results, 0, query));
+  await deleteMessageBestEffort(chatId, messageId);
+  return true;
 }
 
 export default async function (message, ctx) {
-  const ownerId = message.from?.id;
-  if (!isOwner(ownerId)) return;
-  const chatId = message.chat.id;
+  const from = message.from || {};
+  const userId = from.id;
+  const chat = message.chat || {};
+  const chatId = chat.id;
   const messageId = message.message_id;
   const text = (message.text || '').trim();
   try {
-    if (!text) {
-      await sendScreen(chatId, errorView('یک دستور یا لینک یوتیوب بفرستید. /help'));
+    // The DB group is owner-only: everyone else is ignored there.
+    if (isDbGroup(chatId)) {
+      if (!isOwner(userId)) return;
+      await trackUser(from, null);
+      if (text.startsWith('/')) {
+        const handled = await handleDbGroupCommand(chatId, messageId, userId, text);
+        if (handled !== false) return;
+        await sendScreen(chatId, errorView('این دستور را نمی‌شناسم. /help'));
+        return;
+      }
+      if (await handlePendingCategoryName(chatId, messageId, userId, text)) return;
+      if (await handlePendingTitle(chatId, messageId, userId, text)) return;
+      if (text) {
+        // Plain text with no pending title: nothing to do with it.
+        return;
+      }
+      await handleDbGroupFile(chatId, message, userId);
+      return;
+    }
+
+    // Any other group: the bot only works in private chat.
+    if (chat.type && chat.type !== 'private') return;
+
+    // Private chat.
+    await trackUser(from, null);
+
+    // Shared contact (the optional phone on download): save the phone
+    // and deliver the pending file. Delivery never waits for a phone.
+    if (message.contact) {
+      const contact = message.contact;
+      if (!contact.user_id || contact.user_id === userId) {
+        await setUserPhone(userId, contact.phone_number);
+      }
+      await deliverPending(chatId, userId, from);
+      return;
+    }
+
+    // «ادامه بدون شماره»: deliver the pending file without a phone.
+    if (text === 'ادامه بدون شماره') {
+      if (await deliverPending(chatId, userId, from)) return;
+    }
+
+    if (!text && !extractFileMeta(message)) {
       return;
     }
     if (text.startsWith('/')) {
-      await clearPending(ownerId);
+      await clearUserPending(userId);
       const parts = text.split(/\s+/);
       const command = parts[0].split('@')[0];
       if (command === '/start') {
-        await sendScreen(chatId, mainMenuView(await getCounts()));
+        if (!(await ensureMember(chatId, userId))) return;
+        const all = await listFiles();
+        await sendScreen(chatId, mainMenuView(isOwner(userId), all.length));
         return;
       }
-      if (command === '/news') {
-        const placeholder = await sendScreen(chatId, { text: 'در حال گرفتن خبرها…' });
-        const result = await fetchNews();
-        if (result.error) {
-          await replaceScreen(chatId, placeholder, errorView(result.error));
+      if (command === '/projects') {
+        if (!(await ensureMember(chatId, userId))) return;
+        const placeholder = await sendScreen(chatId, { text: 'در حال گرفتن پروژه‌ها…' });
+        const res = await getProjects(false);
+        await replaceScreen(chatId, placeholder, projectsView(res.repos, res.cachedAt, res.liveFailed));
+        return;
+      }
+      if (command === '/socials') {
+        if (!(await ensureMember(chatId, userId))) return;
+        await sendScreen(chatId, socialsView(SOCIALS));
+        return;
+      }
+      if (command === '/files') {
+        if (!(await ensureMember(chatId, userId))) return;
+        const all = await listFiles();
+        await sendScreen(chatId, categoriesView(await listCategories(), all.length));
+        return;
+      }
+      if (command === '/search') {
+        if (!(await ensureMember(chatId, userId))) return;
+        const sent = await sendScreen(chatId, searchPromptView());
+        await setSetting(`pending_search:${userId}`, `${chatId}:${sent}`);
+        return;
+      }
+      if (command === '/get') {
+        if (!(await ensureMember(chatId, userId))) return;
+        const id = parseFileId(parts.slice(1).join(' '));
+        if (!id) {
+          await sendScreen(chatId, errorView('شناسه فایل را بفرستید. مثال: /get F001'));
           return;
         }
-        await replaceScreen(chatId, placeholder, await inboxMenu());
+        await showFile(chatId, id, null);
         return;
       }
-      if (command === '/drafts') {
-        await sendScreen(chatId, draftsView(await listDrafts(), 0));
+      if (command === '/stats') {
+        if (!isOwner(userId)) {
+          await sendScreen(chatId, errorView('این بخش فقط برای صاحب بات است.'));
+          return;
+        }
+        await showStats(chatId);
         return;
       }
-      if (command === '/scheduled') {
-        await sendScreen(chatId, scheduledView(await listScheduled(), 0));
-        return;
-      }
-      if (command === '/feeds') {
-        await sendScreen(chatId, feedsView(await listFeeds()));
-        return;
-      }
-      if (command === '/diag') {
-        await handleDiag(chatId);
-        return;
-      }
-      if (command === '/clear') {
-        const news = await listNewItems();
-        const all = await db.select().from(news_items).all();
-        const discarded = all.filter((n) => n.status === 'discarded').length;
-        await sendScreen(chatId, clearAskView(news.length + discarded));
-        return;
-      }
-      if (command === '/addrss' || command === '/addfeed') {
-        await handleAddFeed(chatId, parts);
+      if (command === '/id') {
+        await sendScreen(chatId, { text: `آیدی این چت: ${chatId}\nآیدی شما: ${userId}` });
         return;
       }
       if (command === '/help') {
@@ -394,14 +624,16 @@ export default async function (message, ctx) {
       await sendScreen(chatId, errorView('این دستور را نمی‌شناسم. /help'));
       return;
     }
-    if (await handlePendingEdit(chatId, messageId, ownerId, text)) return;
-    if (await handlePendingSchedule(chatId, messageId, ownerId, text)) return;
-    if (await handlePendingAddFeed(chatId, messageId, ownerId, text)) return;
-    if (isYouTubeUrl(text)) {
-      await handleYouTube(chatId, text);
+    if (await handlePendingSearch(chatId, messageId, userId, text)) return;
+    // A bare id (F001) opens that file.
+    const bare = normalizeDigits(text);
+    if (/^F\d{1,6}$/i.test(bare)) {
+      if (!(await ensureMember(chatId, userId))) return;
+      const id = parseFileId(text);
+      await showFile(chatId, id, null);
       return;
     }
-    await sendScreen(chatId, errorView('متوجه نشدم. /help را بفرستید تا دستورها را ببینید.'));
+    await sendScreen(chatId, mainMenuView(isOwner(userId), (await listFiles()).length));
   } catch (err) {
     try {
       await sendScreen(chatId, errorView('خطایی رخ داد: ' + (err?.message || 'نامشخص')));

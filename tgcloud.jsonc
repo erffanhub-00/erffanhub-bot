@@ -1,8 +1,7 @@
 {
   // The $schema line is for editor help only; tgcloud reads the rest.
   "$schema": "./node_modules/@tgcloud/cli/schema/tgcloud.json",
-  // Bot-only since v2.1.0: no Mini App. "static": false removes the
-  // previously deployed site (app<id>.tgcloud.ai) on the next push.
-  // Deleting the key instead would leave the old site deployed.
+  // Bot-only: no Mini App. "static": false removes a previously
+  // deployed site (app<id>.tgcloud.ai) on the next push.
   "static": false
 }

@@ -3,23 +3,23 @@
 // the handlers own all api calls. Pure except for the data passed in.
 
 import { paginate } from './pure.js';
-import { truncate, formatTehran, formatDraft, DRAFT_STATUS_FA } from './format.js';
-import { categoryOf } from './categories.js';
+import { truncate, formatTehran, formatFile, fileLine, formatBytes } from './format.js';
 import {
   mainMenu,
   backToMenu,
-  inboxMenuKeyboard,
-  reviewKeyboard,
-  draftKeyboard,
-  scheduledDraftKeyboard,
-  confirmPublishKeyboard,
-  draftsKeyboard,
-  youtubeKeyboard,
-  scheduledKeyboard,
-  feedsKeyboard,
+  joinKeyboard,
+  filesKeyboard,
+  categoryFilesKeyboard,
+  categoriesKeyboard,
+  categoryKeyboard,
+  fileKeyboard,
+  projectsKeyboard,
+  socialsKeyboard,
+  statsKeyboard,
+  usersKeyboard,
+  statsFilesKeyboard,
   confirmKeyboard,
   cancelInputKeyboard,
-  noNameKeyboard,
 } from './keyboards.js';
 
 export const PAGE_SIZE = 5;
@@ -27,25 +27,22 @@ export const PAGE_SIZE = 5;
 export const HELP_TEXT =
   'دستورها:\n' +
   '/start — منوی اصلی\n' +
-  '/news — گرفتن خبرهای تازه و دیدن صندوق خبر\n' +
-  '/drafts — پیش‌نویس‌ها\n' +
-  '/scheduled — پست‌های زمان‌بندی‌شده\n' +
-  '/feeds — مدیریت فیدهای RSS (دکمه افزودن فید هم همان‌جاست)\n' +
-  '/diag — بررسی سلامت اتصال به Worker و AI\n' +
-  '/clear — حذف خبرهای جدید\n' +
-  '/addrss <url> [name] — اضافه کردن فید RSS\n' +
+  '/projects — پروژه‌های گیت‌هاب\n' +
+  '/socials — شبکه‌های اجتماعی\n' +
+  '/files — فایل‌ها (اول دسته‌ها، بعد لیست فایل‌ها)\n' +
+  '/get F001 — دیدن یک فایل با شناسه‌اش\n' +
+  '/search — جستجو با نام فایل (عنوان، توضیح، دسته، نام فایل)\n' +
+  '/id — آیدی این چت و آیدی شما\n' +
   '/help — همین راهنما\n\n' +
-  'صندوق خبر: اول دسته (موضوع یا فید) را انتخاب می‌کنی، بعد خبرها یکی‌یکی\n' +
-  'می‌آیند: تایید یعنی ساخت پست، قبلی/بعدی یعنی ورق زدن. خبر تاییدنشده\n' +
-  '۳ روز در صندوق می‌ماند و بعد پاک می‌شود.\n\n' +
-  'برای ساخت پست از یوتیوب، فقط لینک ویدیو را بفرستید.';
+  'برای استفاده از بات اول باید عضو کانال و گروه شوید.\n' +
+  'فایل‌ها را با شناسه‌شان (مثل F001) یا از لیست فایل‌ها پیدا کنید.';
 
-export function mainMenuView(counts) {
+export function mainMenuView(owner, totalFiles) {
   const text =
-    'مدیر محتوای کانال\n\n' +
-    `خبرهای جدید: ${counts.newsNew} | پیش‌نویس: ${counts.drafts} | زمان‌بندی‌شده: ${counts.scheduled}\n` +
-    `فیدها: ${counts.feedsActive} فعال از ${counts.feedsTotal} | یوتیوب: ${counts.youtube}`;
-  return { text, reply_markup: mainMenu(counts) };
+    'به کتابخانه فایل‌های عرفان خوش آمدید.\n\n' +
+    `فایل‌ها: ${totalFiles} مورد\n` +
+    'پروژه‌های گیت‌هاب، شبکه‌های اجتماعی و فایل‌ها از منوی زیر.';
+  return { text, reply_markup: mainMenu(owner) };
 }
 
 export function helpView() {
@@ -56,219 +53,248 @@ export function errorView(message) {
   return { text: message, reply_markup: backToMenu() };
 }
 
-// Inbox menu: topic categories, then RSS feeds, each with its count.
-export function inboxMenuView(groups, total) {
-  if (total === 0) {
+export function joinView(missing) {
+  const lines = ['برای استفاده از بات، اول عضو شوید:', ''];
+  if (missing.channel) lines.push('• کانال');
+  if (missing.group) lines.push('• گروه');
+  lines.push('');
+  lines.push('بعد از عضویت، «بررسی عضویت» را بزنید.');
+  return { text: lines.join('\n'), reply_markup: joinKeyboard(missing) };
+}
+
+export function projectsView(repos, cachedAt, liveFailed) {
+  if (repos.length === 0) {
     return {
-      text: 'صندوق خبر خالی است.\n\nبا دکمه «گرفتن خبرهای تازه» خبرها را بگیرید.',
-      reply_markup: inboxMenuKeyboard(groups, 0),
+      text: 'فعلاً پروژه‌ای برای نمایش نیست.\n\nگیت‌هاب در دسترس نبود و نسخه ذخیره‌شده‌ای هم نیست.',
+      reply_markup: backToMenu(),
     };
   }
-  const lines = ['صندوق خبر — ' + total + ' خبر جدید', ''];
-  if (groups.categories.length > 0) {
-    lines.push('دسته‌ها:');
-    for (const g of groups.categories) lines.push(`• ${g.name} (${g.count})`);
+  const lines = ['پروژه‌های گیت‌هاب:', ''];
+  for (const r of repos) {
+    lines.push(`• ${r.name}${r.language ? ` (${r.language})` : ''} — ${r.stars} ★`);
+    if (r.description) lines.push('  ' + truncate(r.description, 150));
+    lines.push('  ' + r.url);
     lines.push('');
   }
-  if (groups.feeds.length > 0) {
-    lines.push('فیدها:');
-    for (const g of groups.feeds) lines.push(`• ${g.name} (${g.count})`);
+  if (liveFailed) {
+    lines.push(
+      `گیت‌هاب در دسترس نبود؛ این لیست ذخیره‌شده است${cachedAt ? ' (آخرین بروزرسانی: ' + formatTehran(cachedAt) + ')' : ''}.`,
+    );
+  } else if (cachedAt) {
+    lines.push('آخرین بروزرسانی: ' + formatTehran(cachedAt));
   }
-  lines.push('');
-  lines.push('یک دسته یا فید را انتخاب کن تا خبرهایش را یکی‌یکی ببینی.');
   return {
     text: truncate(lines.join('\n'), 4000),
-    reply_markup: inboxMenuKeyboard(groups, total),
+    reply_markup: projectsKeyboard(repos),
   };
 }
 
-// One news item in the review queue. Exactly 3 buttons: confirm, previous,
-// next. `index` is 0-based inside the group; the group key travels in the
-// button data so prev/next stay in the same group.
-export function reviewView(item, groupKey, groupName, index, total, feedName) {
-  const lines = [];
-  lines.push(`${groupName} — خبر ${index + 1} از ${total}`);
-  lines.push('');
-  lines.push(truncate(item.title || '(بدون عنوان)', 500));
-  const meta = [];
-  meta.push('دسته: ' + categoryOf(item));
-  if (feedName) meta.push('منبع: ' + feedName);
-  const when = item.published_at || item.fetched_at;
-  if (when) meta.push(formatTehran(when));
-  lines.push(meta.join(' | '));
-  if (item.description) lines.push('', truncate(item.description, 800));
-  if (item.link) lines.push('', item.link);
+export function socialsView(socials) {
+  const lines = ['شبکه‌های اجتماعی عرفان:', ''];
+  for (const s of socials) lines.push(`• ${s.label}: ${s.url}`);
   return {
-    text: truncate(lines.join('\n'), 4000),
-    reply_markup: reviewKeyboard(groupKey, item.id),
+    text: lines.join('\n'),
+    reply_markup: socialsKeyboard(socials),
   };
 }
 
-export function groupFinishedView(groupName) {
+export function filesView(items, page, query, backData = 'm:home') {
+  const { pageItems, page: safePage, totalPages, total } = paginate(items, page, PAGE_SIZE);
+  const head = query
+    ? `جستجو: «${truncate(query, 40)}» — ${total} نتیجه`
+    : `فایل‌ها — ${total} مورد`;
+  if (total === 0) {
+    return {
+      text: head + '\n\nهنوز فایلی نیست.' + (query ? '' : ''),
+      reply_markup: backToMenu(),
+    };
+  }
+  const lines = pageItems.map((f) => fileLine(f));
+  const text =
+    `${head} (صفحه ${safePage + 1} از ${totalPages})\n\n` + lines.join('\n');
   return {
-    text: `«${groupName}» تموم شد ✓\n\nهمه خبرهای این دسته تعیین تکلیف شدند.`,
+    text: truncate(text, 4000),
+    reply_markup: filesKeyboard(pageItems, safePage, totalPages, query ? 'sr' : 'fl', backData),
+  };
+}
+
+// Files menu: categories first, then "all files".
+export function categoriesView(categories, total) {
+  if (total === 0) {
+    return {
+      text: 'هنوز فایلی نیست.',
+      reply_markup: backToMenu(),
+    };
+  }
+  const lines = ['فایل‌ها — دسته‌ها:', ''];
+  for (const c of categories) lines.push(`• ${c.name} (${c.count})`);
+  lines.push('');
+  lines.push('یک دسته را انتخاب کن یا همه فایل‌ها را ببین.');
+  return {
+    text: truncate(lines.join('\n'), 4000),
+    reply_markup: categoriesKeyboard(categories, total),
+  };
+}
+
+// Files of one category, paginated.
+export function categoryFilesView(items, page, catIndex, catName) {
+  const { pageItems, page: safePage, totalPages, total } = paginate(items, page, PAGE_SIZE);
+  if (total === 0) {
+    return {
+      text: `دسته «${catName}» خالی است.`,
+      reply_markup: {
+        inline_keyboard: [[{ text: 'دسته‌ها', callback_data: 'm:files' }]],
+      },
+    };
+  }
+  const lines = pageItems.map((f) => fileLine(f));
+  const text =
+    `دسته «${catName}» — ${total} مورد (صفحه ${safePage + 1} از ${totalPages})\n\n` +
+    lines.join('\n');
+  return {
+    text: truncate(text, 4000),
+    reply_markup: categoryFilesKeyboard(pageItems, safePage, totalPages, catIndex),
+  };
+}
+
+export function fileView(file, parts, versions, downloadCount) {
+  return {
+    text: formatFile(file, parts, versions, downloadCount),
+    reply_markup: fileKeyboard(file, versions),
+  };
+}
+
+export function searchPromptView(note = '') {
+  const head = note ? note + '\n' : '';
+  return {
+    text: head + 'نام فایل را بفرستید.\nدر عنوان، توضیح، دسته و نام فایل جستجو می‌شود.',
+    reply_markup: cancelInputKeyboard('sr:cx'),
+  };
+}
+
+export function statsView(s) {
+  const lines = ['آمار شما:', ''];
+  lines.push(`فایل‌ها: ${s.filesTotal} مورد (${s.partsTotal} پارت، ${formatBytes(s.sizeTotal)})`);
+  lines.push(`دانلودها: ${s.downloadsTotal} بار`);
+  lines.push(`کاربران: ${s.usersTotal} نفر (امروز ${s.usersToday}، این هفته ${s.usersWeek})`);
+  lines.push('');
+  lines.push('برای جزئیات، کاربران یا فایل‌ها را باز کنید.');
+  return { text: lines.join('\n'), reply_markup: statsKeyboard() };
+}
+
+export function statsUsersView(items, page) {
+  const { pageItems, page: safePage, totalPages, total } = paginate(items, page, PAGE_SIZE);
+  if (total === 0) {
+    return {
+      text: 'هنوز کاربری ثبت نشده است.',
+      reply_markup: { inline_keyboard: [[{ text: '📊 آمار', callback_data: 'm:stats' }]] },
+    };
+  }
+  const lines = pageItems.map((u) => {
+    const name = [u.first_name, u.last_name].filter(Boolean).join(' ') || '—';
+    const handle = u.username ? '@' + u.username : '—';
+    const member = u.is_member === 1 ? 'عضو' : u.is_member === 0 ? 'غیرعضو' : '؟';
+    return `${handle} — ${name}\n  دانلود: ${u.downloads} | ${member} | آخرین فعالیت: ${formatTehran(u.last_seen)}`;
+  });
+  const text =
+    `کاربران — ${total} نفر (صفحه ${safePage + 1} از ${totalPages})\n\n` +
+    lines.join('\n\n');
+  return {
+    text: truncate(text, 4000),
+    reply_markup: usersKeyboard(pageItems, safePage, totalPages),
+  };
+}
+
+export function statsUserView(user, history) {
+  const name = [user.first_name, user.last_name].filter(Boolean).join(' ') || '—';
+  const lines = [
+    `${user.username ? '@' + user.username : '—'} — ${name}`,
+    '',
+    `آیدی: ${user.user_id}`,
+    `زبان: ${user.language_code || '—'}`,
+    `پرمیوم: ${user.is_premium ? 'بله' : 'خیر'}`,
+    `شماره: ${user.phone || '—'}`,
+    `عضویت: ${user.is_member === 1 ? 'عضو' : user.is_member === 0 ? 'غیرعضو' : 'نامشخص'}`,
+    `اولین بازدید: ${formatTehran(user.first_seen)}`,
+    `آخرین فعالیت: ${formatTehran(user.last_seen)}`,
+    `دانلودها: ${history.length} بار`,
+  ];
+  if (history.length > 0) {
+    lines.push('');
+    lines.push('آخرین دانلودها:');
+    for (const h of history.slice(0, 10)) {
+      lines.push(`• ${h.file_id} v${h.version} — ${formatTehran(h.downloaded_at)}`);
+    }
+  }
+  return {
+    text: truncate(lines.join('\n'), 4000),
     reply_markup: {
-      inline_keyboard: [
-        [{ text: 'صندوق خبر', callback_data: 'rv:menu' }],
-        [{ text: 'منوی اصلی', callback_data: 'm:home' }],
-      ],
+      inline_keyboard: [[{ text: '👥 کاربران', callback_data: 'st:users:0' }]],
     },
   };
 }
 
-export function draftView(draft, opts) {
-  const status = DRAFT_STATUS_FA[draft.status] || draft.status || '';
-  const head = draft.kind === 'youtube' ? '🎬 ویدیوی یوتیوب\n\n' : '';
-  const text = head + formatDraft(draft) + (status ? `\n\nوضعیت: ${status}` : '');
-  const keyboard =
-    draft.status === 'scheduled'
-      ? scheduledDraftKeyboard(draft, opts)
-      : draftKeyboard(draft, opts);
-  return { text: truncate(text, 4000), reply_markup: keyboard };
-}
-
-export function confirmPublishView(draft) {
-  return {
-    text: truncate(formatDraft(draft) + '\n\nآیا مطمئن هستید؟', 4000),
-    reply_markup: confirmPublishKeyboard(draft.id),
-  };
-}
-
-export function draftsView(items, page) {
+export function statsFilesView(items, page, perFile) {
   const { pageItems, page: safePage, totalPages, total } = paginate(items, page, PAGE_SIZE);
   if (total === 0) {
     return {
-      text: 'هنوز پیش‌نویسی نیست.\n\nاز صندوق خبر یک خبر را انتخاب کنید و «تایید» را بزنید.',
-      reply_markup: backToMenu(),
+      text: 'هنوز فایلی نیست.',
+      reply_markup: { inline_keyboard: [[{ text: '📊 آمار', callback_data: 'm:stats' }]] },
     };
   }
-  const lines = pageItems.map((d) => {
-    const kind = d.kind === 'youtube' ? '[یوتیوب]' : '[خبر]';
-    const status = DRAFT_STATUS_FA[d.status] || d.status || 'پیش‌نویس';
-    const when =
-      d.status === 'scheduled' && d.publish_at ? ' — ' + formatTehran(d.publish_at) : '';
-    return `${kind} ${truncate(d.title || '(بدون عنوان)', 55)} (${status}${when})`;
+  const lines = pageItems.map((f) => {
+    const agg = perFile[f.id] || { count: 0, lastAt: 0 };
+    return `${fileLine(f)}\n  دانلود: ${agg.count} | آخرین دانلود: ${agg.lastAt ? formatTehran(agg.lastAt) : '—'}`;
   });
   const text =
-    `پیش‌نویس‌ها — ${total} مورد (صفحه ${safePage + 1} از ${totalPages})\n\n` +
-    lines.join('\n');
-  return { text: truncate(text, 4000), reply_markup: draftsKeyboard(pageItems, safePage, totalPages) };
-}
-
-export function youtubeView(items, page) {
-  const { pageItems, page: safePage, totalPages, total } = paginate(items, page, PAGE_SIZE);
-  if (total === 0) {
-    return {
-      text: 'هنوز ویدیوی یوتیوبی نیست.\n\nلینک یک ویدیو را بفرستید تا پیش‌نویسش ساخته شود.',
-      reply_markup: backToMenu(),
-    };
-  }
-  const lines = pageItems.map((d) => {
-    const status = DRAFT_STATUS_FA[d.status] || d.status || 'پیش‌نویس';
-    const when =
-      d.status === 'scheduled' && d.publish_at ? ' — ' + formatTehran(d.publish_at) : '';
-    return `${truncate(d.title || '(بدون عنوان)', 55)} (${status}${when})`;
-  });
-  const text =
-    `ویدیوهای یوتیوب — ${total} مورد (صفحه ${safePage + 1} از ${totalPages})\n\n` +
-    lines.join('\n');
-  return { text: truncate(text, 4000), reply_markup: youtubeKeyboard(pageItems, safePage, totalPages) };
-}
-
-export function scheduledView(items, page) {
-  const { pageItems, page: safePage, totalPages, total } = paginate(items, page, PAGE_SIZE);
-  if (total === 0) {
-    return {
-      text: 'هیچ پست زمان‌بندی‌شده‌ای نیست.',
-      reply_markup: backToMenu(),
-    };
-  }
-  const lines = pageItems.map((d) => {
-    const when = d.publish_at ? formatTehran(d.publish_at) : '؟';
-    return `${when} — ${truncate(d.title || '(بدون عنوان)', 60)}`;
-  });
-  const text =
-    `زمان‌بندی‌شده‌ها — ${total} مورد (صفحه ${safePage + 1} از ${totalPages})\n\n` +
-    lines.join('\n');
+    `فایل‌ها — ${total} مورد (صفحه ${safePage + 1} از ${totalPages})\n\n` +
+    lines.join('\n\n');
   return {
     text: truncate(text, 4000),
-    reply_markup: scheduledKeyboard(pageItems, safePage, totalPages),
+    reply_markup: statsFilesKeyboard(pageItems, safePage, totalPages),
   };
 }
 
-export function feedsView(feeds) {
-  if (feeds.length === 0) {
-    return {
-      text: 'هیچ فیدی نیست.\n\nبا دکمه «➕ افزودن فید» یک فید اضافه کنید.',
-      reply_markup: feedsKeyboard(feeds),
-    };
-  }
-  const lines = feeds.map((f) => {
-    const state = f.active !== 0 ? '✅ فعال' : '⏸️ غیرفعال';
-    return `${state} — ${f.name || f.url}\n${f.url}`;
-  });
-  const text = 'فیدهای RSS:\n\n' + lines.join('\n\n');
-  return { text: truncate(text, 4000), reply_markup: feedsKeyboard(feeds) };
-}
-
-export function promptEditView(draft) {
+export function statsFileView(file, parts, versions, downloadCount) {
   return {
-    text: 'متن جدید پست را بفرستید.\n\n' + truncate(formatDraft(draft), 3000),
-    reply_markup: cancelInputKeyboard(`d:ec:${draft.id}`),
+    text: formatFile(file, parts, versions, downloadCount),
+    reply_markup: {
+      inline_keyboard: [[{ text: '📁 فایل‌ها', callback_data: 'st:files:0' }]],
+    },
   };
 }
 
-export function promptScheduleView(draft, note = '') {
-  const head = note
-    ? note + '\nزمان انتشار را به وقت تهران بفرستید.\nمثال: 2026-11-08 18:00 یا فقط 18:00 برای امروز.\n\n'
-    : 'زمان انتشار را به وقت تهران بفرستید.\nمثال: 2026-11-08 18:00 یا فقط 18:00 برای امروز.\n\n';
+export function confirmDeleteView(file) {
   return {
-    text: head + truncate(formatDraft(draft), 3000),
-    reply_markup: cancelInputKeyboard(`d:sx:${draft.id}`),
+    text: `فایل ${file.id} «${file.title || '(بدون عنوان)'}» حذف شود؟\nهمه پارت‌ها و ورژن‌هایش پاک می‌شوند. پیام‌های گروه دیتابیس دست نمی‌خورند.`,
+    reply_markup: confirmKeyboard(`db:dy:${file.id}`, 'db:dn'),
   };
 }
 
-// Ask for the feed URL (step 1 of the in-bot add-feed flow).
-export function promptFeedUrlView(note = '') {
-  const head = note ? note + '\n' : '';
+export function promptTitleView(categoryNames, selected, isBundle) {
+  const lines = [
+    `فایل${isBundle ? ' (بسته چندپارتی)' : ''} دریافت شد.`,
+    '',
+    'عنوان را در خط اول و توضیح را در خط‌های بعد، در یک پیام بفرستید.',
+    '',
+    `دسته: ${selected || 'سایر'} — اگر دسته دیگری می‌خواهید، از دکمه‌های زیر انتخاب کنید یا «دسته جدید» را بزنید.`,
+  ];
   return {
-    text: head + 'آدرس فید RSS را بفرستید.\nمثال: https://www.zoomit.ir/feed/',
-    reply_markup: cancelInputKeyboard('f:ax'),
+    text: lines.join('\n'),
+    reply_markup: categoryKeyboard(categoryNames, selected || 'سایر'),
   };
 }
 
-// Ask for the feed name (step 2). Sending «-» also skips the name.
-export function promptFeedNameView(url) {
-  return {
-    text: `آدرس: ${url}\n\nنام فید را بفرستید (اختیاری) یا «بدون نام» را بزنید.`,
-    reply_markup: noNameKeyboard(),
-  };
-}
-
-export function clearAskView(count) {
-  return {
-    text:
-      `همه خبرهای جدید و ردشده (${count} مورد) حذف شوند؟\n` +
-      'پیش‌نویس‌ها حذف نمی‌شوند.',
-    reply_markup: confirmKeyboard('cl:yes', 'cl:no'),
-  };
-}
-
-export function diagView(r) {
-  const mark = (ok) => (ok ? '✓' : '✗');
-  const lines = ['تشخیص:'];
-  lines.push(`${mark(r.workerOk)} Worker در دسترس است${r.workerError ? ' — ' + r.workerError : ''}`);
-  lines.push(`${mark(r.secretOk)} سکرت مشترک درست است${r.secretError ? ' — ' + r.secretError : ''}`);
-  lines.push(`${mark(r.aiOk)} AI کار می‌کند${r.aiError ? ' — ' + r.aiError : ''}`);
-  lines.push(`${mark(r.kvOk)} KV تنظیم شده${r.kvError ? ' — ' + r.kvError : ''}`);
-  lines.push(
-    r.channel
-      ? `✓ کانال تنظیم شده${r.channel.title ? ' (' + r.channel.title + ')' : ''}`
-      : '✗ کانال تنظیم نشده — بات را در کانال ادمین کنید.',
-  );
-  lines.push('');
-  lines.push(
-    `فیدها: ${r.counts.feedsActive} فعال از ${r.counts.feedsTotal} | خبرهای جدید: ${r.counts.newsNew} | پیش‌نویس: ${r.counts.drafts} | زمان‌بندی‌شده: ${r.counts.scheduled} | منتشرشده: ${r.counts.published} | یوتیوب: ${r.counts.youtube}`,
-  );
-  return { text: truncate(lines.join('\n'), 4000), reply_markup: backToMenu() };
+export function titleSavedView(file) {
+  const lines = [
+    `✅ ثبت شد — ${file.id}`,
+    '',
+    `عنوان: ${file.title || '(بدون عنوان)'}`,
+    `نسخه: v${file.version || 1}`,
+    `نوع: ${file.kind || '—'}`,
+    `پارت‌ها: ${file.parts_count || 1}`,
+  ];
+  if (file.size_total) lines.push(`حجم: ${formatBytes(file.size_total)}`);
+  if (file.description) lines.push('', file.description);
+  return { text: lines.join('\n') };
 }

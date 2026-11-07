@@ -1,17 +1,1 @@
-{
-  "description": "ErffanHub v2 — Telegram channel content manager (RSS inbox, YouTube, scheduling, publishing) on Telegram Serverless + Cloudflare Worker. Bot-only, no dashboard.",
-  "devDependencies": {
-    "@tgcloud/cli": "^0.2.0"
-  },
-  "engines": {
-    "node": ">=18"
-  },
-  "name": "erffanhub-bot",
-  "private": true,
-  "scripts": {
-    "check": "node --check tgcloud/schema.js && node --check tgcloud/lib/config.js && node --check tgcloud/lib/pure.js && node --check tgcloud/lib/errors.js && node --check tgcloud/lib/auth.js && node --check tgcloud/lib/worker.js && node --check tgcloud/lib/store.js && node --check tgcloud/lib/format.js && node --check tgcloud/lib/categories.js && node --check tgcloud/lib/review.js && node --check tgcloud/lib/keyboards.js && node --check tgcloud/lib/views.js && node --check tgcloud/lib/inbox.js && node --check tgcloud/handlers/message.js && node --check tgcloud/handlers/callback_query.js && node --check tgcloud/handlers/my_chat_member.js && npm --prefix worker run check",
-    "test": "node --test \"test/*.test.js\" \"worker/test/*.test.js\""
-  },
-  "type": "module",
-  "version": "2.2.0"
-}
+{"description":"ErffanHub Files — public Telegram file-library bot (GitHub showcase, force-join, file library with versions) on Telegram Serverless.","devDependencies":{"@tgcloud/cli":"^0.2.0"},"engines":{"node":">=18"},"name":"erffanhub-bot","private":true,"scripts":{"check":"node --check tgcloud/schema.js && node --check tgcloud/lib/config.js && node --check tgcloud/lib/auth.js && node --check tgcloud/lib/pure.js && node --check tgcloud/lib/format.js && node --check tgcloud/lib/keyboards.js && node --check tgcloud/lib/views.js && node --check tgcloud/lib/store.js && node --check tgcloud/lib/library.js && node --check tgcloud/lib/github.js && node --check tgcloud/handlers/message.js && node --check tgcloud/handlers/callback_query.js","test":"node --test \"test/*.test.js\""},"type":"module","version":"1.0.0"}

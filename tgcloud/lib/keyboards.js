@@ -1,25 +1,23 @@
-// Persian inline keyboards, bot-only. Every screen is one message that
-// gets edited in place; buttons carry short callback data (64-byte limit).
-// The review queue has exactly 3 buttons per news item: confirm, previous,
-// next. Group keys are short ('all', 'c<category index>', 'f<feed id>').
+// Persian inline keyboards. Every screen is one message that gets
+// edited in place; buttons carry short callback data (64-byte limit).
 
-// Main menu. `counts` carries the YouTube draft count for its own row.
-export function mainMenu(counts) {
-  const youtube = counts?.youtube ?? 0;
-  return {
-    inline_keyboard: [
-      [
-        { text: 'خبرها', callback_data: 'm:in' },
-        { text: 'پیش‌نویس‌ها', callback_data: 'm:dr' },
-      ],
-      [
-        { text: 'زمان‌بندی‌شده‌ها', callback_data: 'm:sc' },
-        { text: 'فیدها', callback_data: 'm:fd' },
-      ],
-      [{ text: `یوتیوب (${youtube})`, callback_data: 'm:yt' }],
-      [{ text: 'راهنما', callback_data: 'm:help' }],
+import { CHANNEL_URL, GROUP_URL } from './config.js';
+
+// Main menu. The owner also gets the stats button.
+export function mainMenu(owner) {
+  const rows = [
+    [
+      { text: '📦 پروژه‌های گیت‌هاب', callback_data: 'm:projects' },
+      { text: '🔗 شبکه‌های اجتماعی', callback_data: 'm:socials' },
     ],
-  };
+    [
+      { text: '📁 فایل‌ها', callback_data: 'm:files' },
+      { text: '🔍 جستجو', callback_data: 'm:search' },
+    ],
+  ];
+  if (owner) rows.push([{ text: '📊 آمار من', callback_data: 'm:stats' }]);
+  rows.push([{ text: 'راهنما', callback_data: 'm:help' }]);
+  return { inline_keyboard: rows };
 }
 
 export function backToMenu() {
@@ -28,184 +26,172 @@ export function backToMenu() {
   };
 }
 
-// Inbox menu: two sections — topic categories, then RSS feeds — each row a
-// group button with its count, plus "all news", fetch and home.
-export function inboxMenuKeyboard(groups, total) {
+// Force-join screen: join buttons (URLs) + the "check membership"
+// button. `missing` is { channel: bool, group: bool }.
+export function joinKeyboard(missing) {
   const rows = [];
-  for (const g of groups.categories) {
-    rows.push([{ text: `${g.name} (${g.count})`, callback_data: `rv:g:${g.key}` }]);
+  if (missing.channel && CHANNEL_URL) {
+    rows.push([{ text: 'عضویت در کانال', url: CHANNEL_URL }]);
   }
-  for (const g of groups.feeds) {
-    rows.push([{ text: `${g.name} (${g.count})`, callback_data: `rv:g:${g.key}` }]);
+  if (missing.group && GROUP_URL) {
+    rows.push([{ text: 'عضویت در گروه', url: GROUP_URL }]);
   }
-  rows.push([{ text: `همه خبرها (${total})`, callback_data: 'rv:g:all' }]);
+  rows.push([{ text: '✅ بررسی عضویت', callback_data: 'm:check' }]);
+  return { inline_keyboard: rows };
+}
+
+// File list page: one row per file. `backData` is the back button
+// target ('m:home' by default, 'm:files' from a category list).
+export function filesKeyboard(items, page, totalPages, prefix, backData = 'm:home') {
+  const rows = items.map((item) => [
+    {
+      text: `${item.id} — ${(item.title || '(بدون عنوان)').slice(0, 35)}`,
+      callback_data: `fl:vw:${item.id}`,
+    },
+  ]);
+  const nav = [];
+  if (page > 0) nav.push({ text: '‹ قبلی', callback_data: `${prefix}:pg:${page - 1}` });
+  if (page < totalPages - 1) {
+    nav.push({ text: 'بعدی ›', callback_data: `${prefix}:pg:${page + 1}` });
+  }
+  if (nav.length > 0) rows.push(nav);
+  rows.push([{ text: 'منوی اصلی', callback_data: backData }]);
+  return { inline_keyboard: rows };
+}
+
+// Category file list page: paging keeps the category index.
+export function categoryFilesKeyboard(items, page, totalPages, catIndex) {
+  const rows = items.map((item) => [
+    {
+      text: `${item.id} — ${(item.title || '(بدون عنوان)').slice(0, 35)}`,
+      callback_data: `fl:vw:${item.id}`,
+    },
+  ]);
+  const nav = [];
+  if (page > 0) nav.push({ text: '‹ قبلی', callback_data: `fc:pg:${catIndex}:${page - 1}` });
+  if (page < totalPages - 1) {
+    nav.push({ text: 'بعدی ›', callback_data: `fc:pg:${catIndex}:${page + 1}` });
+  }
+  if (nav.length > 0) rows.push(nav);
+  rows.push([{ text: 'دسته‌ها', callback_data: 'm:files' }]);
+  rows.push([{ text: 'منوی اصلی', callback_data: 'm:home' }]);
+  return { inline_keyboard: rows };
+}
+
+// Files menu: categories with counts + "all files". `categories` is
+// [{ name, count }]; indices are resolved live from the same ordering.
+export function categoriesKeyboard(categories, total) {
+  const rows = categories.map((c, i) => [
+    { text: `${c.name} (${c.count})`, callback_data: `fl:cat:${i}` },
+  ]);
+  rows.push([{ text: `همه فایل‌ها (${total})`, callback_data: 'fl:all' }]);
+  rows.push([{ text: 'منوی اصلی', callback_data: 'm:home' }]);
+  return { inline_keyboard: rows };
+}
+
+// Owner ingest: pick a category. `names` is the option list
+// (existing categories + «سایر»); `selected` is the current pick.
+export function categoryKeyboard(names, selected) {
+  const rows = [];
+  for (let i = 0; i < names.length; i += 2) {
+    const row = names.slice(i, i + 2).map((n, j) => ({
+      text: (n === selected ? '✓ ' : '') + n,
+      callback_data: `db:cat:${i + j}`,
+    }));
+    rows.push(row);
+  }
+  rows.push([{ text: '➕ دسته جدید', callback_data: 'db:catnew' }]);
+  rows.push([{ text: 'لغو', callback_data: 'db:cx' }]);
+  return { inline_keyboard: rows };
+}
+
+// File view: download + version buttons + back to the file list.
+export function fileKeyboard(file, versions) {
+  const rows = [
+    [{ text: '⬇️ دریافت', callback_data: `fl:dl:${file.id}:${file.version || 1}` }],
+  ];
+  if (versions.length > 1) {
+    const verRow = versions.map((v) => ({
+      text: v.version === (file.version || 1) ? `✓ v${v.version}` : `v${v.version}`,
+      callback_data: `fl:ver:${file.id}:${v.version}`,
+    }));
+    rows.push(verRow);
+  }
+  rows.push([{ text: 'فایل‌ها', callback_data: 'm:files' }]);
+  rows.push([{ text: 'منوی اصلی', callback_data: 'm:home' }]);
+  return { inline_keyboard: rows };
+}
+
+// GitHub projects: one URL button per repo (max ~8 per screen).
+export function projectsKeyboard(repos) {
+  const rows = repos.slice(0, 10).map((r) => [
+    { text: `${r.name} (${r.stars} ★)`, url: r.url },
+  ]);
   rows.push([
-    { text: 'گرفتن خبرهای تازه', callback_data: 'rv:ft' },
+    { text: '🔄 بروزرسانی', callback_data: 'gh:ref' },
     { text: 'منوی اصلی', callback_data: 'm:home' },
   ]);
   return { inline_keyboard: rows };
 }
 
-// One news item in review: exactly 3 buttons — confirm, previous, next.
-export function reviewKeyboard(groupKey, newsId) {
+// Social links: one URL button per social.
+export function socialsKeyboard(socials) {
+  const rows = socials.map((s) => [{ text: s.label, url: s.url }]);
+  rows.push([{ text: 'منوی اصلی', callback_data: 'm:home' }]);
+  return { inline_keyboard: rows };
+}
+
+// Owner stats home: users list + files list.
+export function statsKeyboard() {
   return {
     inline_keyboard: [
       [
-        { text: '✅ تایید', callback_data: `rv:cf:${groupKey}:${newsId}` },
-        { text: '◀ قبلی', callback_data: `rv:pv:${groupKey}:${newsId}` },
-        { text: 'بعدی ▶', callback_data: `rv:nx:${groupKey}:${newsId}` },
+        { text: '👥 کاربران', callback_data: 'st:users:0' },
+        { text: '📁 فایل‌ها', callback_data: 'st:files:0' },
       ],
+      [{ text: 'منوی اصلی', callback_data: 'm:home' }],
     ],
   };
 }
 
-// Extra rows shared by both draft keyboards: a "watch on YouTube" URL
-// button for video drafts, and (after a review confirm) a resume row.
-function draftExtraRows(draft, opts) {
-  const rows = [];
-  if (draft?.kind === 'youtube' && draft?.button_url) {
-    rows.push([{ text: 'تماشا در یوتیوب', url: draft.button_url }]);
-  }
-  if (opts?.resume) {
-    rows.push([{ text: '↩ برگشت به بررسی', callback_data: 'rv:rs' }]);
-  }
-  return rows;
-}
-
-// Draft view. `draft` is the row object; `opts.resume` adds the
-// "back to review" row (only after a confirm from the review queue).
-export function draftKeyboard(draft, opts) {
-  const id = typeof draft === 'object' ? draft.id : draft;
-  const row = typeof draft === 'object' ? draft : null;
-  return {
-    inline_keyboard: [
-      [
-        { text: 'انتشار الان', callback_data: `d:pub:${id}` },
-        { text: '✏️ ویرایش', callback_data: `d:ed:${id}` },
-      ],
-      [
-        { text: 'بازنویسی', callback_data: `d:rw:${id}` },
-        { text: 'کوتاه‌تر', callback_data: `d:sh:${id}` },
-      ],
-      [
-        { text: 'زمان‌بندی', callback_data: `d:sc:${id}` },
-        { text: '🗑️ حذف', callback_data: `d:del:${id}` },
-      ],
-      ...draftExtraRows(row, opts),
-      [{ text: 'پیش‌نویس‌ها', callback_data: 'm:dr' }],
-    ],
-  };
-}
-
-// Draft view when the draft is scheduled: adds "لغو زمان‌بندی".
-export function scheduledDraftKeyboard(draft, opts) {
-  const id = typeof draft === 'object' ? draft.id : draft;
-  const row = typeof draft === 'object' ? draft : null;
-  return {
-    inline_keyboard: [
-      [
-        { text: 'انتشار الان', callback_data: `d:pub:${id}` },
-        { text: '✏️ ویرایش', callback_data: `d:ed:${id}` },
-      ],
-      [
-        { text: 'بازنویسی', callback_data: `d:rw:${id}` },
-        { text: 'کوتاه‌تر', callback_data: `d:sh:${id}` },
-      ],
-      [
-        { text: 'لغو زمان‌بندی', callback_data: `d:cs:${id}` },
-        { text: '🗑️ حذف', callback_data: `d:del:${id}` },
-      ],
-      ...draftExtraRows(row, opts),
-      [{ text: 'زمان‌بندی‌شده‌ها', callback_data: 'm:sc' }],
-    ],
-  };
-}
-
-export function confirmPublishKeyboard(draftId) {
-  return {
-    inline_keyboard: [
-      [
-        {
-          text: '✅ تایید و انتشار',
-          callback_data: `d:pc:${draftId}`,
-        },
-        { text: 'لغو', callback_data: `d:cx:${draftId}` },
-      ],
-    ],
-  };
-}
-
-// Drafts list page: one row per draft.
-export function draftsKeyboard(items, page, totalPages) {
-  const rows = items.map((item) => [
+// Users list page: one row per user.
+export function usersKeyboard(items, page, totalPages) {
+  const rows = items.map((u) => [
     {
-      text: (item.title || '(بدون عنوان)').slice(0, 45),
-      callback_data: `d:vw:${item.id}`,
+      text: `${u.username ? '@' + u.username : (u.first_name || u.user_id)}`.slice(0, 40),
+      callback_data: `st:u:${u.user_id}`,
     },
   ]);
   const nav = [];
-  if (page > 0) nav.push({ text: '‹ قبلی', callback_data: `dr:pg:${page - 1}` });
+  if (page > 0) nav.push({ text: '‹ قبلی', callback_data: `st:users:${page - 1}` });
   if (page < totalPages - 1) {
-    nav.push({ text: 'بعدی ›', callback_data: `dr:pg:${page + 1}` });
+    nav.push({ text: 'بعدی ›', callback_data: `st:users:${page + 1}` });
   }
   if (nav.length > 0) rows.push(nav);
-  rows.push([{ text: 'منوی اصلی', callback_data: 'm:home' }]);
+  rows.push([{ text: '📊 آمار', callback_data: 'm:stats' }]);
   return { inline_keyboard: rows };
 }
 
-// YouTube drafts list page: same shape as the drafts list, its own
-// pagination callbacks so the two lists never mix.
-export function youtubeKeyboard(items, page, totalPages) {
-  const rows = items.map((item) => [
+// Stats file list page: one row per file (taps show the same file view
+// as users see it, without the download button).
+export function statsFilesKeyboard(items, page, totalPages) {
+  const rows = items.map((f) => [
     {
-      text: (item.title || '(بدون عنوان)').slice(0, 45),
-      callback_data: `d:vw:${item.id}`,
+      text: `${f.id} — ${(f.title || '(بدون عنوان)').slice(0, 35)}`,
+      callback_data: `st:f:${f.id}`,
     },
   ]);
   const nav = [];
-  if (page > 0) nav.push({ text: '‹ قبلی', callback_data: `yt:pg:${page - 1}` });
+  if (page > 0) nav.push({ text: '‹ قبلی', callback_data: `st:files:${page - 1}` });
   if (page < totalPages - 1) {
-    nav.push({ text: 'بعدی ›', callback_data: `yt:pg:${page + 1}` });
+    nav.push({ text: 'بعدی ›', callback_data: `st:files:${page + 1}` });
   }
   if (nav.length > 0) rows.push(nav);
-  rows.push([{ text: 'منوی اصلی', callback_data: 'm:home' }]);
+  rows.push([{ text: '📊 آمار', callback_data: 'm:stats' }]);
   return { inline_keyboard: rows };
 }
 
-// Scheduled list page: one cancel row per draft.
-export function scheduledKeyboard(items, page, totalPages) {
-  const rows = items.map((item) => [
-    {
-      text: '❌ لغو: ' + (item.title || '(بدون عنوان)').slice(0, 35),
-      callback_data: `sc:cx:${item.id}:${page}`,
-    },
-    { text: '👁️', callback_data: `d:vw:${item.id}` },
-  ]);
-  const nav = [];
-  if (page > 0) nav.push({ text: '‹ قبلی', callback_data: `sc:pg:${page - 1}` });
-  if (page < totalPages - 1) {
-    nav.push({ text: 'بعدی ›', callback_data: `sc:pg:${page + 1}` });
-  }
-  if (nav.length > 0) rows.push(nav);
-  rows.push([{ text: 'منوی اصلی', callback_data: 'm:home' }]);
-  return { inline_keyboard: rows };
-}
-
-// Feeds list: one row per feed (toggle + delete), plus the add button.
-export function feedsKeyboard(feeds) {
-  const rows = feeds.map((feed) => [
-    {
-      text: `${feed.active !== 0 ? '✅' : '⏸️'} ${(feed.name || feed.url).slice(0, 18)}`,
-      callback_data: `f:tg:${feed.id}`,
-    },
-    { text: '🗑️', callback_data: `f:del:${feed.id}` },
-  ]);
-  rows.push([{ text: '➕ افزودن فید', callback_data: 'f:add' }]);
-  rows.push([{ text: 'منوی اصلی', callback_data: 'm:home' }]);
-  return { inline_keyboard: rows };
-}
-
-// Yes/no confirmation (used by /clear).
+// Yes/no confirmation (used by /del in the DB group).
 export function confirmKeyboard(yesData, noData) {
   return {
     inline_keyboard: [
@@ -217,21 +203,9 @@ export function confirmKeyboard(yesData, noData) {
   };
 }
 
-// Cancel button shown while the bot waits for a text reply (edit/schedule).
+// Cancel button shown while the bot waits for a text reply.
 export function cancelInputKeyboard(cancelData) {
   return {
     inline_keyboard: [[{ text: 'لغو', callback_data: cancelData }]],
-  };
-}
-
-// "No name" button shown while the bot waits for a feed name.
-export function noNameKeyboard() {
-  return {
-    inline_keyboard: [
-      [
-        { text: 'بدون نام', callback_data: 'f:nn' },
-        { text: 'لغو', callback_data: 'f:ax' },
-      ],
-    ],
   };
 }

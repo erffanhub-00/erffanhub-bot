@@ -1,162 +1,99 @@
-# ErffanHub v2
+# ErffanHub Files — v1.0.0
 
-A bot-only Telegram channel content manager. Fetch news from RSS feeds, review it one by one (grouped by AI topic category or by RSS feed), turn a news item (or a YouTube link) into a post with AI help, edit it, schedule it, and publish it to the channel — everything happens inside the bot. There is no dashboard.
+A public Telegram bot on **Telegram Serverless** (no server, no
+Cloudflare Worker, no Mini App): a showcase + file library for Erfan.
 
-## What it does
+- **Force-join:** the bot is connected to his channel and a public
+  group. On `/start` it checks membership in both; until the user
+  joins, the menu stays locked.
+- **GitHub projects:** `/projects` fetches his public repos live from
+  the GitHub API (name, description, language, stars, link), cached in
+  SQLite so it still works when GitHub is down.
+- **Socials:** Telegram, X and GitHub links (editable in
+  `tgcloud/lib/config.js`).
+- **File library:** a private DB group (only the owner + the bot) is
+  the database. The owner sends a file there, the bot gives it an
+  auto ID (`F001`, `F002`…) and asks for a title + description +
+  category in the same group. Users find files by browsing
+  categories, by ID (`F001`) or by name search, and the bot forwards
+  the file to them (the original Telegram `file_id` — nothing is
+  re-uploaded, the original file name is never changed).
+- **Categories:** at ingest the owner picks a category (existing
+  categories as buttons, or «دسته جدید» to create one; skipped →
+  «سایر»). Users browse 📁 فایل‌ها by category first. `/setcat F001
+  <category>` in the DB group changes a category later. Search also
+  matches the category.
+- **Multi-part files:** `/bundle` → send the parts → `/done` → one ID
+  for the whole bundle.
+- **Versions:** `/update F001` + a new file → version v2; old versions
+  stay retrievable, latest is the default.
+- **User data (automatic, never asked):** everything Telegram already
+  gives the bot — user id, username, name, language, is_premium,
+  first seen, last active, force-join status, downloads — is stored in
+  the `users` table. The bot never asks a user for personal info.
+  The ONE exception: on download, a user who never shared a phone is
+  offered an optional native share-contact button («📱 ارسال شماره
+  تلفن (اختیاری)») plus «ادامه بدون شماره». The phone is never
+  required — the file is always delivered, and a user who shared once
+  is never asked again. The phone is visible only in the owner-only
+  `/stats`.
+- **Owner stats:** `/stats` (owner only) shows file stats (per-file
+  downloads, last downloaded) and user stats (totals, new users,
+  user list, per-user download history).
+- **Anti-clutter:** all navigation happens in ONE message edited in
+  place. The only new messages are the delivered files themselves.
 
-1. **RSS inbox** — fetches news from the feeds you choose. AI sorts every item into a topic category (موبایل، هوش مصنوعی، کامپیوتر و سخت‌افزار، نرم‌افزار و اپ، بازی، امنیت، اینترنت و شبکه، گجت و پوشیدنی، سایر).
-2. **Review queue** — pick a category or a feed, then read the news one by one: تایید to make a post, قبلی / بعدی to move through the group. Unconfirmed news stays 3 days, then is deleted.
-3. **YouTube** — send a video link, get its thumbnail + title, edit the description, publish as a photo + caption with a glass "watch on YouTube" button. YouTube drafts have their own section in the menu, separate from news.
-4. **Scheduling** — set a publish time (Tehran time) for a draft; it publishes on its own.
-5. **Publishing** — now, or on schedule, into the channel.
+## Setup
 
-AI only writes/edits the channel post. It does not write the news itself — news comes from RSS exactly as the source wrote it. There is no free-form AI chat.
+1. **BotFather:** create a NEW bot, open it → **Serverless** → turn
+   it on. Get the CLI access token (Serverless → CLI Access → Access
+   token). Its form is `app<id>:<secret>` — this is NOT the bot API
+   token.
+2. **Create the channel, the public group and the private DB group.**
+   Add the bot as **admin in the channel** (so it can check
+   membership) and as a **member in both groups**.
+3. **Fill `tgcloud/lib/config.js`:** `OWNER_TELEGRAM_ID`,
+   `CHANNEL_ID`, `GROUP_ID`, `DB_GROUP_ID`, `CHANNEL_URL`,
+   `GROUP_URL`. Get the ids with `/id` after the first deploy, or
+   from @userinfobot / @getmyid_bot. The repo copy keeps placeholders
+   (`0` / `''`) — never commit real ids.
+4. **Deploy:**
+   ```sh
+   npm install
+   npx tgcloud login        # paste the app<id>:<secret> token
+   npx tgcloud push
+   npx tgcloud migrate      # creates settings, files, file_parts,
+                            # file_versions, downloads, users, github_cache
+   ```
+5. **Try it:** `/start` in the bot. In the DB group, send a file and
+   follow the bot's prompts.
 
-## How the bot works
+## Commands
 
-One screen at a time. `/start` shows the main menu (news, drafts, scheduled, feeds, YouTube, help). Every button edits that same message — nothing new is sent. The inbox shows groups first (categories, then feeds, each with its count, plus "all news"); tapping a group opens the review: one news item, exactly 3 buttons (✅ تایید | ◀ قبلی | بعدی ▶). Confirming writes the post with AI, deletes the news item, and turns the same message into the draft view (publish / edit / rewrite / shorter / schedule / delete), with a «برگشت به بررسی» button that resumes the group at the next item. Drafts, scheduled posts, feeds and YouTube videos work the same way. News you do not confirm stays 3 days and is then pruned automatically; `/clear` deletes all new news in one go. Published drafts older than 30 days are pruned on fetch.
+- `/start` — main menu (force-join checked first)
+- `/projects` — GitHub projects
+- `/socials` — social links
+- `/files` — browse the file library (categories first)
+- `/get F001` — open a file by id (bare `F001` also works)
+- `/search` — search files by name (title, description, category, file name)
+- `/stats` — owner-only stats (files + users)
+- `/id` — this chat's id and your Telegram id
+- `/help` — help
 
-## Architecture
+DB group (owner only):
 
-Two pieces, one publishing path:
-
-```
-Telegram Serverless                    Cloudflare Worker (erffanhub-ai)
-  bot + SQLite                           RSS fetch, AI writing, AI
-    ├─ news review queue                  classification, publishing
-    ├─ drafts, YouTube, scheduling        15-min Cron (scheduled posts only)
-    └─ feeds                              KV: scheduled-post queue only
-                                           publishing happens ONLY here
-```
-
-The bot never publishes directly. It asks the Worker to publish, so there is a single Publisher path. The bot and the Worker share one secret (`SHARED_SECRET`); it never appears in browser JS.
-
-## Setup — do these in order
-
-### 1. Create the bot and connect Serverless
-
-1. In Telegram, talk to [@BotFather](https://t.me/BotFather) and open your bot.
-2. Open **Serverless** and turn it on (this unlocks the CLI access token).
-3. Copy the CLI access token and log in:
-
-```sh
-npx tgcloud login
-```
-
-### 2. Deploy the Worker first
-
-```sh
-cd worker
-wrangler kv namespace create SCHEDULED_KV
-```
-
-Put the returned id in `worker/wrangler.toml` (replacing `PLACEHOLDER_KV_ID`) and add your owner id:
-
-```toml
-[vars]
-OWNER_TELEGRAM_ID = "123456789"
-```
-
-Then:
-
-```sh
-wrangler secret put BOT_TOKEN
-wrangler secret put SHARED_SECRET
-wrangler deploy
-```
-
-Note the `workers.dev` URL printed by the deploy — that is `WORKER_URL`.
-
-### 3. Fill in the config
-
-In `tgcloud/lib/config.js`, set:
-
-- `OWNER_TELEGRAM_ID` — your Telegram user ID (ask [@userinfobot](https://t.me/userinfobot)).
-- `WORKER_URL` — the Worker URL from step 2.
-- `SHARED_SECRET` — must be exactly the same value as the Cloudflare secret from step 2.
-
-### 4. Add the bot to the channel
-
-Add the bot as an admin of your channel (it needs permission to post messages).
-
-### 5. Deploy the bot
-
-```sh
-npm install
-npx tgcloud push
-npx tgcloud migrate
-```
-
-The migration (from the live v5 database) makes 2 changes — confirm both when `migrate` asks:
-
-1. **DROP TABLE publish_log** (the unused table from v5).
-2. **ADD COLUMN category TEXT to news_items** (the AI topic category; old rows stay empty and read as «سایر»).
-
-### 6. Open the bot
-
-Open the bot in Telegram and send `/start`, then `/diag` — every check should be ✓.
-
-## RSS feeds (default)
-
-| Source | URL |
-|---|---|
-| Zoomit | https://www.zoomit.ir/feed/ |
-| Digiato | https://digiato.com/feed |
-| TechCrunch | https://techcrunch.com/feed/ |
-
-Verified live 2026-11-07. Feeds can be added, toggled and removed with `/feeds` (the «➕ افزودن فید» button asks for the URL, then an optional name) and `/addrss`.
-
-## Bot commands
-
-| Command | What it does |
-|---|---|
-| `/start` | Main menu |
-| `/news` | Fetch fresh news and open the inbox (categories + feeds) |
-| `/drafts` | List drafts (news and YouTube, labelled) |
-| `/scheduled` | List scheduled posts |
-| `/feeds` | Manage RSS feeds, add a feed from inside the bot |
-| `/diag` | Check Worker, secret, AI, KV and channel |
-| `/clear` | Delete all new news |
-| `/addrss <url> [name]` | Add an RSS feed |
-| `/help` | Show help |
-
-## Troubleshooting
-
-Run `/diag` first — it checks each piece and tells you the real reason when one fails.
-
-| /diag says | Cause | Fix |
-|---|---|---|
-| Worker در دسترس نیست | `WORKER_URL` wrong, or the Worker is not deployed | Check `WORKER_URL` in `tgcloud/lib/config.js`; run `wrangler deploy` in `worker/` |
-| سکرت مشترک درست نیست | `SHARED_SECRET` in `config.js` differs from the Cloudflare secret | Make both identical, then `npx tgcloud push` again |
-| AI کار نمی‌کند | Workers AI error | Look at the Worker logs in the Cloudflare dashboard |
-| KV تنظیم نشده | `SCHEDULED_KV` has no id in `wrangler.toml` | `wrangler kv namespace create SCHEDULED_KV`, put the id in `wrangler.toml`, `wrangler deploy` |
-| کانال تنظیم نشده | The bot is not a channel admin | Add the bot as admin to the channel |
-
-If a Worker call fails anywhere else in the bot, the message shows the real reason too — never a bare "خطایی رخ داد".
-
-## Costs
-
-All free, no bank card needed.
-
-| Piece | Cost |
-|---|---|
-| Telegram Serverless | Free start reported |
-| Cloudflare Workers (Free) | 0 — Cron every 15 min = 96 requests/day |
-| Cloudflare Workers AI (Free) | 0 — 10,000 neurons/day; one post ≈ 20 neurons, one classify batch ≈ a few neurons |
-| Cloudflare KV (Free) | 0 — scheduled queue only |
-
-## Security notes
-
-- **Owner-only.** Only `OWNER_TELEGRAM_ID` can use the bot; the server enforces this.
-- **HTTPS-only RSS**, with a timeout and a size cap.
-- **No auto-retry on uncertain publish.** If Telegram does not answer but the post may have gone out, the post is flagged for review instead of being published twice.
-- **YouTube:** oEmbed returns the thumbnail and title, but no description — the description is edited in the draft.
+- `/bundle` — start a multi-part bundle, `/done` to finish it
+- `/update F001` — new version of a file
+- `/setcat F001 <category>` — change a file's category
+- `/del F001` — delete a file (with confirm)
+- `/list` — list all files
+- `/cancel` — cancel a pending input
 
 ## Test
 
 ```sh
-npm test             # node --test "test/*.test.js" "worker/test/*.test.js"
-npm run check        # node --check on every source file (bot + Worker)
+npm test             # node --test "test/*.test.js"
+npm run check        # node --check on every source file
 ```
 
 ## Me

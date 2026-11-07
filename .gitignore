@@ -1,4 +1,2 @@
+node_modules/
 .tgcloud/
-node_modules
-.dev.vars
-worker/.dev.vars

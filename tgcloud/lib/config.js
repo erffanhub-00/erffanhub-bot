@@ -1,23 +1,30 @@
 // Fill these in before the first deploy. No real secrets live here.
+// IDs are numbers (negative for channels/groups); get them with /id
+// after the bot is running, or from @userinfobot / @getmyid_bot.
 
-// Numeric Telegram user id of the bot owner (Erfan). Get it from
-// @userinfobot. While it is 0, isOwner() refuses everyone.
+// Numeric Telegram user id of the bot owner (Erfan). While it is 0,
+// isOwner() refuses everyone.
 export const OWNER_TELEGRAM_ID = 0;
 
-// Base URL of the Cloudflare Worker (erffanhub-ai), after deploying it.
-// Example: "https://erffanhub-ai.erfan.workers.dev"
-export const WORKER_URL = 'https://erffanhub-ai.<subdomain>.workers.dev';
+// Channel and public group the bot is connected to (force-join).
+// 0 means "not configured yet" — that check is skipped until set.
+export const CHANNEL_ID = 0;
+export const GROUP_ID = 0;
 
-// Shared secret sent as the X-Erffan-Secret header on every Worker call.
-// Must equal the secret configured on the Cloudflare Worker.
-// Never put a real secret in this file in a shared copy; Erfan sets it
-// in his own checkout before deploying.
-export const SHARED_SECRET = 'CHANGE_ME';
+// Private database group (only the owner + the bot). Files sent here
+// become library files. 0 means "not configured yet".
+export const DB_GROUP_ID = 0;
 
-// Default RSS feeds, seeded into rss_feeds on first run if that table is
-// empty. Verified live 2026-11-07. Editable later with /feeds and /addrss.
-export const DEFAULT_FEEDS = [
-  { name: 'Zoomit', url: 'https://www.zoomit.ir/feed/' },
-  { name: 'Digiato', url: 'https://digiato.com/feed' },
-  { name: 'TechCrunch', url: 'https://techcrunch.com/feed/' },
+// Public join links shown on the force-join screen.
+export const CHANNEL_URL = '';
+export const GROUP_URL = '';
+
+// GitHub username whose public repos are shown on /projects.
+export const GITHUB_USER = 'erffanhub-00';
+
+// Social links shown on /socials. Edit freely.
+export const SOCIALS = [
+  { label: 'تلگرام', url: 'https://t.me/erffan_hub' },
+  { label: 'ایکس', url: 'https://x.com/Erffanhub_00' },
+  { label: 'گیت‌هاب', url: 'https://github.com/erffanhub-00' },
 ];

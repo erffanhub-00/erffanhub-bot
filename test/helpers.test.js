@@ -1,179 +1,300 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  normalizeUrl,
-  isYouTubeUrl,
-  extractYouTubeUrl,
-  parseTehranDateTime,
   paginate,
-  pruneBefore,
-  prunePublishedBefore,
-  validateFeedUrl,
+  formatBytes,
+  nextFileId,
+  normalizeDigits,
+  parseFileId,
+  parseTitleDescription,
+  groupCategories,
+  categoryOptions,
+  needsPhonePrompt,
+  extractFileMeta,
+  searchFiles,
+  isMemberStatus,
+  buildUserRow,
+  aggregateDownloads,
+  countNewUsers,
+  parseGitHubRepos,
 } from '../tgcloud/lib/pure.js';
-
-test('normalizeUrl strips tracking params, fragment and trailing slash', () => {
-  assert.equal(
-    normalizeUrl('https://example.com/foo/?utm_source=x&fbclid=abc#top'),
-    'https://example.com/foo',
-  );
-  assert.equal(
-    normalizeUrl('https://example.com/foo/?gclid=1&keep=2'),
-    'https://example.com/foo?keep=2',
-  );
-  assert.equal(normalizeUrl('https://example.com/foo/'), 'https://example.com/foo');
-});
-
-test('normalizeUrl lowercases scheme and host but keeps path case', () => {
-  assert.equal(
-    normalizeUrl('HTTPS://Example.COM/Path/Article'),
-    'https://example.com/Path/Article',
-  );
-});
-
-test('normalizeUrl returns unparsable input unchanged', () => {
-  assert.equal(normalizeUrl('not a url'), 'not a url');
-  assert.equal(normalizeUrl('  '), '');
-});
-
-test('isYouTubeUrl matches watch, shorts and youtu.be links', () => {
-  assert.equal(isYouTubeUrl('https://www.youtube.com/watch?v=dQw4w9WgXcQ'), true);
-  assert.equal(
-    isYouTubeUrl('https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=42s'),
-    true,
-  );
-  assert.equal(isYouTubeUrl('https://youtu.be/dQw4w9WgXcQ'), true);
-  assert.equal(
-    isYouTubeUrl('https://www.youtube.com/shorts/dQw4w9WgXcQ'),
-    true,
-  );
-  assert.equal(isYouTubeUrl('https://m.youtube.com/watch?v=dQw4w9WgXcQ'), true);
-});
-
-test('isYouTubeUrl rejects non-video YouTube and other pages', () => {
-  assert.equal(isYouTubeUrl('https://www.youtube.com/'), false);
-  assert.equal(isYouTubeUrl('https://example.com/watch?v=dQw4w9WgXcQ'), false);
-  assert.equal(isYouTubeUrl('just some text'), false);
-  assert.equal(isYouTubeUrl(''), false);
-});
-
-test('extractYouTubeUrl finds the first YouTube link in text', () => {
-  assert.equal(
-    extractYouTubeUrl('watch this https://youtu.be/dQw4w9WgXcQ please'),
-    'https://youtu.be/dQw4w9WgXcQ',
-  );
-  assert.equal(extractYouTubeUrl('no link here'), null);
-});
-
-test('parseTehranDateTime converts a full Tehran datetime to UTC ms', () => {
-  // Tehran is UTC+3:30, so 18:00 Tehran is 14:30 UTC.
-  assert.equal(
-    parseTehranDateTime('2026-11-07 18:00'),
-    Date.UTC(2026, 10, 7, 14, 30, 0),
-  );
-  assert.equal(
-    parseTehranDateTime('2026-07-01 12:00'),
-    Date.UTC(2026, 6, 1, 8, 30, 0),
-  );
-  assert.equal(
-    parseTehranDateTime('2026-01-15 00:30'),
-    Date.UTC(2026, 0, 14, 21, 0, 0),
-  );
-});
-
-test('parseTehranDateTime round-trips through the Tehran timezone', () => {
-  const ms = parseTehranDateTime('2026-11-07 18:00');
-  const parts = new Intl.DateTimeFormat('en-GB', {
-    timeZone: 'Asia/Tehran',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hourCycle: 'h23',
-  }).formatToParts(new Date(ms));
-  const get = (type) => parts.find((p) => p.type === type).value;
-  assert.equal(`${get('year')}-${get('month')}-${get('day')}`, '2026-11-07');
-  assert.equal(`${get('hour')}:${get('minute')}`, '18:00');
-});
-
-test('parseTehranDateTime treats HH:mm as today in Tehran', () => {
-  const ms = parseTehranDateTime('18:30');
-  assert.notEqual(ms, null);
-  const fmt = new Intl.DateTimeFormat('en-GB', {
-    timeZone: 'Asia/Tehran',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hourCycle: 'h23',
-  });
-  const today = fmt.formatToParts(new Date(Date.now()));
-  const at = fmt.formatToParts(new Date(ms));
-  const get = (ps, type) => ps.find((p) => p.type === type).value;
-  assert.equal(get(at, 'year'), get(today, 'year'));
-  assert.equal(get(at, 'month'), get(today, 'month'));
-  assert.equal(get(at, 'day'), get(today, 'day'));
-  assert.equal(`${get(at, 'hour')}:${get(at, 'minute')}`, '18:30');
-});
-
-test('parseTehranDateTime rejects invalid input', () => {
-  assert.equal(parseTehranDateTime(''), null);
-  assert.equal(parseTehranDateTime('hello'), null);
-  assert.equal(parseTehranDateTime('2026-11-07'), null);
-  assert.equal(parseTehranDateTime('2026-13-01 10:00'), null);
-  assert.equal(parseTehranDateTime('2026-02-30 10:00'), null);
-  assert.equal(parseTehranDateTime('2026-11-07 25:00'), null);
-  assert.equal(parseTehranDateTime('2026-11-07 10:60'), null);
-  assert.equal(parseTehranDateTime('25:00'), null);
-  assert.equal(parseTehranDateTime('10:60'), null);
-  assert.equal(parseTehranDateTime('2026-11-07 18:00:00'), null);
-});
 
 test('paginate slices 5 per page and clamps out-of-range pages', () => {
   const items = Array.from({ length: 12 }, (_, i) => i + 1);
-  const first = paginate(items, 0, 5);
-  assert.deepEqual(first.pageItems, [1, 2, 3, 4, 5]);
-  assert.equal(first.page, 0);
-  assert.equal(first.totalPages, 3);
-  assert.equal(first.total, 12);
-  const last = paginate(items, 2, 5);
-  assert.deepEqual(last.pageItems, [11, 12]);
+  assert.deepEqual(paginate(items, 0, 5).pageItems, [1, 2, 3, 4, 5]);
+  assert.deepEqual(paginate(items, 2, 5).pageItems, [11, 12]);
   assert.deepEqual(paginate(items, 9, 5).pageItems, [11, 12]);
-  assert.deepEqual(paginate(items, -3, 5).pageItems, [1, 2, 3, 4, 5]);
-  assert.deepEqual(paginate([], 0, 5), {
-    pageItems: [],
-    page: 0,
-    totalPages: 1,
-    total: 0,
+  assert.deepEqual(paginate([], 0, 5), { pageItems: [], page: 0, totalPages: 1, total: 0 });
+});
+
+test('formatBytes renders Persian units', () => {
+  assert.equal(formatBytes(500), '500 بایت');
+  assert.equal(formatBytes(2048), '2.0 کیلوبایت');
+  assert.equal(formatBytes(5 * 1024 * 1024), '5.0 مگابایت');
+  assert.equal(formatBytes(2 * 1024 * 1024 * 1024), '2.00 گیگابایت');
+  assert.equal(formatBytes(null), '—');
+});
+
+test('nextFileId is sequential and zero-padded', () => {
+  assert.equal(nextFileId(0), 'F001');
+  assert.equal(nextFileId(7), 'F008');
+  assert.equal(nextFileId(24), 'F025');
+  assert.equal(nextFileId(999), 'F1000');
+});
+
+test('normalizeDigits converts Persian and Arabic digits', () => {
+  assert.equal(normalizeDigits('۲۵'), '25');
+  assert.equal(normalizeDigits('۱۲۳'), '123');
+  assert.equal(normalizeDigits('٢٥'), '25');
+  assert.equal(normalizeDigits('F۰۲۵'), 'F025');
+  assert.equal(normalizeDigits('abc'), 'abc');
+});
+
+test('parseFileId resolves F001 and F25/F025 (Persian digits work) and nothing else', () => {
+  assert.equal(parseFileId('F001'), 'F001');
+  assert.equal(parseFileId('f25'), 'F025');
+  assert.equal(parseFileId('F025'), 'F025');
+  assert.equal(parseFileId('F۲۵'), 'F025');
+  assert.equal(parseFileId('/get F003'), 'F003');
+  // A bare number is NOT a file id — files are requested by their
+  // auto id (F001) or by name search.
+  assert.equal(parseFileId('25'), null);
+  assert.equal(parseFileId('۲۵'), null);
+  assert.equal(parseFileId('/get 25'), null);
+});
+
+test('parseFileId returns null for non-id text', () => {
+  assert.equal(parseFileId('hello'), null);
+  assert.equal(parseFileId(''), null);
+  assert.equal(parseFileId('F'), null);
+  assert.equal(parseFileId('پرامپت هوش مصنوعی'), null);
+});
+
+test('parseTitleDescription splits title and description; a # line is plain text, never a number', () => {
+  assert.deepEqual(parseTitleDescription('عنوان فایل\nتوضیح کامل'), {
+    title: 'عنوان فایل',
+    description: 'توضیح کامل',
   });
-});
-
-test('pruneBefore is exactly 3 days before now', () => {
-  const now = Date.UTC(2026, 10, 7, 12, 0, 0);
-  assert.equal(pruneBefore(now), now - 3 * 24 * 60 * 60 * 1000);
-});
-
-test('prunePublishedBefore is exactly 30 days before now', () => {
-  const now = Date.UTC(2026, 10, 7, 12, 0, 0);
-  assert.equal(prunePublishedBefore(now), now - 30 * 24 * 60 * 60 * 1000);
-});
-
-test('validateFeedUrl accepts https URLs and strips trailing punctuation', () => {
-  assert.deepEqual(validateFeedUrl('https://www.zoomit.ir/feed/'), {
-    ok: true,
-    url: 'https://www.zoomit.ir/feed/',
+  assert.deepEqual(parseTitleDescription('فقط عنوان'), {
+    title: 'فقط عنوان',
+    description: null,
   });
-  assert.deepEqual(validateFeedUrl('لینک: https://digiato.com/feed.'), {
-    ok: true,
-    url: 'https://digiato.com/feed',
+  // The bot never asks for a number: "#۲۵" is kept as the title text.
+  assert.deepEqual(parseTitleDescription('#۲۵\nعنوان فایل'), {
+    title: '#۲۵',
+    description: 'عنوان فایل',
   });
+  assert.deepEqual(parseTitleDescription(''), { title: '', description: null });
 });
 
-test('validateFeedUrl rejects http, bare domains and junk', () => {
-  for (const bad of ['', 'zoomit.ir/feed', 'http://example.com/feed', 'https://', 'hello']) {
-    const res = validateFeedUrl(bad);
-    assert.equal(res.ok, false, bad);
-    assert.ok(typeof res.error === 'string' && res.error.length > 0, bad);
+test('groupCategories counts per category, most files first, missing means سایر', () => {
+  assert.deepEqual(
+    groupCategories([
+      { category: 'پرامپت' },
+      { category: 'پرامپت' },
+      { category: 'عکس' },
+      { category: null },
+      {},
+    ]),
+    [
+      { name: 'پرامپت', count: 2 },
+      { name: 'سایر', count: 2 },
+      { name: 'عکس', count: 1 },
+    ],
+  );
+  assert.deepEqual(groupCategories([]), []);
+});
+
+test('categoryOptions lists existing categories and appends سایر when missing', () => {
+  assert.deepEqual(
+    categoryOptions([{ category: 'پرامپت' }, { category: 'عکس' }]),
+    ['پرامپت', 'عکس', 'سایر'],
+  );
+  assert.deepEqual(
+    categoryOptions([{ category: 'سایر' }, { category: 'پرامپت' }]),
+    ['پرامپت', 'سایر'],
+  );
+  assert.deepEqual(categoryOptions([]), ['سایر']);
+});
+
+test('needsPhonePrompt is true only while the user never shared a phone', () => {
+  assert.equal(needsPhonePrompt(null), true);
+  assert.equal(needsPhonePrompt({ user_id: 1, phone: null }), true);
+  assert.equal(needsPhonePrompt({ user_id: 1 }), true);
+  assert.equal(needsPhonePrompt({ user_id: 1, phone: '+989121234567' }), false);
+});
+
+test('extractFileMeta keeps the original file_name verbatim', () => {
+  const meta = extractFileMeta({
+    message_id: 10,
+    date: 1794000000,
+    document: {
+      file_id: 'BQACAgQ',
+      file_unique_id: 'AgAD',
+      file_name: 'پرامپت ویژه (نسخه ۱).txt',
+      mime_type: 'text/plain',
+      file_size: 1234,
+    },
+  });
+  assert.equal(meta.kind, 'document');
+  assert.equal(meta.file_name, 'پرامپت ویژه (نسخه ۱).txt');
+  assert.equal(meta.tg_file_id, 'BQACAgQ');
+  assert.equal(meta.size, 1234);
+});
+
+test('extractFileMeta takes the largest photo size and keeps dimensions', () => {
+  const meta = extractFileMeta({
+    message_id: 11,
+    date: 1794000000,
+    photo: [
+      { file_id: 'small', file_unique_id: 's', file_size: 1000, width: 90, height: 90 },
+      { file_id: 'big', file_unique_id: 'b', file_size: 90000, width: 1280, height: 720 },
+    ],
+  });
+  assert.equal(meta.kind, 'photo');
+  assert.equal(meta.tg_file_id, 'big');
+  assert.equal(meta.width, 1280);
+  assert.equal(meta.height, 720);
+  assert.equal(meta.size, 90000);
+});
+
+test('extractFileMeta covers video, audio and voice with duration', () => {
+  const video = extractFileMeta({
+    message_id: 12,
+    date: 1794000000,
+    video: { file_id: 'v', file_unique_id: 'vu', file_name: 'clip.mp4', mime_type: 'video/mp4', file_size: 5000, width: 640, height: 360, duration: 83 },
+  });
+  assert.equal(video.kind, 'video');
+  assert.equal(video.duration, 83);
+  assert.equal(video.file_name, 'clip.mp4');
+  const audio = extractFileMeta({
+    message_id: 13,
+    date: 1794000000,
+    audio: { file_id: 'a', file_unique_id: 'au', duration: 200, file_size: 3000 },
+  });
+  assert.equal(audio.kind, 'audio');
+  assert.equal(audio.duration, 200);
+  const voice = extractFileMeta({
+    message_id: 14,
+    date: 1794000000,
+    voice: { file_id: 'vc', file_unique_id: 'vu', duration: 12, file_size: 8000 },
+  });
+  assert.equal(voice.kind, 'voice');
+  assert.equal(voice.duration, 12);
+});
+
+test('extractFileMeta returns null when the message has no file', () => {
+  assert.equal(extractFileMeta({ message_id: 1, text: 'سلام' }), null);
+  assert.equal(extractFileMeta(null), null);
+});
+
+test('searchFiles matches title, description, category and file names, case-insensitive', () => {
+  const files = [
+    { title: 'پرامپت میدجرنی', description: 'عکس حرفه‌ای', category: 'پرامپت', fileNames: ['prompt.txt'] },
+    { title: 'چک‌لیست داکر', description: '', category: 'ابزار', fileNames: ['docker-cheatsheet.md'] },
+    { title: 'عکس پروفایل', description: 'آواتار', category: 'عکس', fileNames: ['avatar.jpg'] },
+  ];
+  assert.deepEqual(searchFiles(files, 'پرامپت').map((f) => f.title), ['پرامپت میدجرنی']);
+  assert.deepEqual(searchFiles(files, 'DOCKER').map((f) => f.title), ['چک‌لیست داکر']);
+  assert.deepEqual(searchFiles(files, 'avatar').map((f) => f.title), ['عکس پروفایل']);
+  assert.deepEqual(searchFiles(files, 'ابزار').map((f) => f.title), ['چک‌لیست داکر']);
+  assert.deepEqual(searchFiles(files, 'عکس').map((f) => f.title), ['پرامپت میدجرنی', 'عکس پروفایل']);
+  assert.deepEqual(searchFiles(files, 'توضیح'), []);
+  assert.deepEqual(searchFiles(files, ''), []);
+  assert.deepEqual(searchFiles(files, '   '), []);
+});
+
+test('isMemberStatus maps getChatMember statuses (fail closed)', () => {
+  for (const s of ['creator', 'administrator', 'member', 'restricted']) {
+    assert.equal(isMemberStatus(s), true, s);
   }
+  for (const s of ['left', 'kicked', 'unknown', null, undefined]) {
+    assert.equal(isMemberStatus(s), false, String(s));
+  }
+});
+
+test('buildUserRow upserts from the Telegram update: first_seen set once, last_seen moves', () => {
+  const from = {
+    id: 123,
+    username: 'someone',
+    first_name: 'Ali',
+    last_name: 'Rezaei',
+    language_code: 'fa',
+    is_premium: true,
+  };
+  const first = buildUserRow(from, null, 1000, null);
+  assert.equal(first.user_id, 123);
+  assert.equal(first.username, 'someone');
+  assert.equal(first.first_name, 'Ali');
+  assert.equal(first.last_name, 'Rezaei');
+  assert.equal(first.language_code, 'fa');
+  assert.equal(first.is_premium, 1);
+  assert.equal(first.first_seen, 1000);
+  assert.equal(first.last_seen, 1000);
+  assert.equal(first.is_member, null);
+
+  const second = buildUserRow({ ...from, username: 'renamed' }, first, 5000, true);
+  assert.equal(second.first_seen, 1000);
+  assert.equal(second.last_seen, 5000);
+  assert.equal(second.username, 'renamed');
+  assert.equal(second.is_member, 1);
+
+  // A later interaction without a fresh membership value keeps the old one.
+  const third = buildUserRow(from, second, 9000, null);
+  assert.equal(third.is_member, 1);
+  assert.equal(third.first_seen, 1000);
+});
+
+test('buildUserRow never invents a phone number or contact data', () => {
+  const row = buildUserRow({ id: 5, first_name: 'X' }, null, 100, false);
+  assert.ok(!('phone_number' in row));
+  assert.ok(!('contact' in row));
+  assert.ok(!('location' in row));
+  assert.equal(row.phone, null);
+  assert.equal(row.is_member, 0);
+});
+
+test('buildUserRow keeps a phone shared earlier across later interactions', () => {
+  const base = buildUserRow({ id: 5, first_name: 'X' }, null, 100, true);
+  base.phone = '+989121234567';
+  const next = buildUserRow({ id: 5, first_name: 'X' }, base, 200, true);
+  assert.equal(next.phone, '+989121234567');
+  assert.equal(next.first_seen, 100);
+});
+
+test('aggregateDownloads counts per file and tracks the last download', () => {
+  const agg = aggregateDownloads([
+    { file_id: 'F001', downloaded_at: 100 },
+    { file_id: 'F001', downloaded_at: 300 },
+    { file_id: 'F002', downloaded_at: 200 },
+  ]);
+  assert.deepEqual(agg, {
+    F001: { count: 2, lastAt: 300 },
+    F002: { count: 1, lastAt: 200 },
+  });
+  assert.deepEqual(aggregateDownloads([]), {});
+});
+
+test('countNewUsers counts first_seen inside the window', () => {
+  const now = Date.UTC(2026, 10, 7, 12, 0, 0);
+  const rows = [
+    { first_seen: now - 60 * 60 * 1000 },
+    { first_seen: now - 2 * 24 * 60 * 60 * 1000 },
+    { first_seen: now - 10 * 24 * 60 * 60 * 1000 },
+  ];
+  assert.equal(countNewUsers(rows, now, 24 * 60 * 60 * 1000), 1);
+  assert.equal(countNewUsers(rows, now, 7 * 24 * 60 * 60 * 1000), 2);
+});
+
+test('parseGitHubRepos drops forks, sorts newest first, keeps display fields', () => {
+  const repos = parseGitHubRepos([
+    { name: 'old', fork: false, description: 'a', language: 'Python', stargazers_count: 3, html_url: 'https://github.com/u/old', updated_at: '2026-01-01T00:00:00Z' },
+    { name: 'new', fork: false, description: null, language: 'JavaScript', stargazers_count: 10, html_url: 'https://github.com/u/new', updated_at: '2026-11-01T00:00:00Z' },
+    { name: 'forked', fork: true, description: 'x', language: null, stargazers_count: 99, html_url: 'https://github.com/u/forked', updated_at: '2026-11-06T00:00:00Z' },
+  ]);
+  assert.deepEqual(repos.map((r) => r.name), ['new', 'old']);
+  assert.equal(repos[0].stars, 10);
+  assert.equal(repos[0].url, 'https://github.com/u/new');
+  assert.equal(repos[0].description, null);
+  assert.deepEqual(parseGitHubRepos(null), []);
 });

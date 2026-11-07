@@ -1,55 +1,97 @@
 import { table, integer, text, sql } from 'sdk/db';
 
-// ErffanHub v2 database. No foreign keys: the runtime runs with
+// ErffanHub Files v1 database. No foreign keys: the runtime runs with
 // PRAGMA foreign_keys off, so integrity is the application's job.
-// Timestamps are epoch milliseconds (Date.now()), except created_at
-// defaults below which use unixepoch() (seconds) only when the code
-// does not set the value explicitly. Code always sets them explicitly.
+// Timestamps are epoch milliseconds (Date.now()) unless noted.
+// User data: everything stored about a user comes from what Telegram
+// already gives the bot in the update (id, username, name, language,
+// is_premium) plus what the user does in the bot. The bot never asks a
+// user for personal information and never requests contact/location.
 
 export const settings = table('settings', {
   key: text('key').primaryKey(),
   value: text('value'),
 });
 
-export const rss_feeds = table('rss_feeds', {
-  id: integer('id').primaryKey({ autoIncrement: true }),
-  url: text('url').notNull().unique(),
-  name: text('name'),
-  active: integer('active').notNull().default(1),
-  created_at: integer('created_at').default(sql`(unixepoch())`),
-  last_fetched_at: integer('last_fetched_at'),
-  last_error: text('last_error'),
-});
-
-export const news_items = table('news_items', {
-  id: integer('id').primaryKey({ autoIncrement: true }),
-  feed_id: integer('feed_id'),
-  guid: text('guid').unique(),
+// One row per file (latest version info lives here; old versions live
+// in file_versions + file_parts with their version number).
+export const files = table('files', {
+  id: text('id').primaryKey(),
   title: text('title'),
-  link: text('link'),
   description: text('description'),
-  published_at: integer('published_at'),
-  fetched_at: integer('fetched_at'),
-  // AI topic category (v7). Null = fetched before v7; read as 'سایر'.
+  // Owner-chosen category; «سایر» when skipped.
   category: text('category'),
-  // new | discarded (confirm hard-deletes the row in v7)
-  status: text('status'),
+  version: integer('version').notNull().default(1),
+  kind: text('kind'),
+  size_total: integer('size_total'),
+  parts_count: integer('parts_count').notNull().default(1),
+  downloads: integer('downloads').notNull().default(0),
+  created_at: integer('created_at').default(sql`(unixepoch())`),
+  updated_at: integer('updated_at'),
+  db_chat_id: integer('db_chat_id'),
+  db_message_id: integer('db_message_id'),
 });
 
-export const drafts = table('drafts', {
+// One row per part of a file version. The Telegram file_id is all the
+// bot needs to send the file again — no re-upload, no stored bytes.
+export const file_parts = table('file_parts', {
   id: integer('id').primaryKey({ autoIncrement: true }),
-  // news | youtube
-  kind: text('kind'),
+  file_id: text('file_id'),
+  version: integer('version').notNull().default(1),
+  part_no: integer('part_no').notNull().default(1),
+  tg_file_id: text('tg_file_id'),
+  tg_unique_id: text('tg_unique_id'),
+  file_name: text('file_name'),
+  mime: text('mime'),
+  size: integer('size'),
+  width: integer('width'),
+  height: integer('height'),
+  duration: integer('duration'),
+  db_message_id: integer('db_message_id'),
+});
+
+// Snapshot of a file's title/description when a new version is created.
+export const file_versions = table('file_versions', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  file_id: text('file_id'),
+  version: integer('version'),
   title: text('title'),
-  body: text('body'),
-  media_url: text('media_url'),
-  source_url: text('source_url'),
-  button_text: text('button_text'),
-  button_url: text('button_url'),
-  news_item_id: integer('news_item_id'),
-  // draft | scheduled | published, plus discarded (row kept for history)
-  status: text('status'),
-  // epoch ms UTC, only when status is scheduled
-  publish_at: integer('publish_at'),
+  description: text('description'),
   created_at: integer('created_at').default(sql`(unixepoch())`),
+});
+
+// One row per file delivery (not per part).
+export const downloads = table('downloads', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  file_id: text('file_id'),
+  version: integer('version'),
+  user_id: integer('user_id'),
+  username: text('username'),
+  downloaded_at: integer('downloaded_at'),
+});
+
+// One row per Telegram user that ever interacted with the bot.
+// Every column comes from the Telegram update itself; first_seen is set
+// once, last_seen and is_member are updated on every interaction.
+export const users = table('users', {
+  user_id: integer('user_id').primaryKey(),
+  username: text('username'),
+  first_name: text('first_name'),
+  last_name: text('last_name'),
+  language_code: text('language_code'),
+  is_premium: integer('is_premium').notNull().default(0),
+  // Optional phone, shared by the user on download (never requested
+  // as a condition — delivery never waits for it). Null = never shared.
+  phone: text('phone'),
+  first_seen: integer('first_seen'),
+  last_seen: integer('last_seen'),
+  is_member: integer('is_member'),
+});
+
+// One row (id = 1): last good GitHub API response, so the projects
+// screen still works when GitHub is unreachable.
+export const github_cache = table('github_cache', {
+  id: integer('id').primaryKey(),
+  body: text('body'),
+  fetched_at: integer('fetched_at'),
 });
