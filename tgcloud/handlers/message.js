@@ -3,7 +3,7 @@
 //   files / search / file view / download / wallet / owner stats.
 // - DB group (owner only): file ingest, bundles, updates, delete, list,
 //   price setting.
-// - Receipts group (owner only): /id and the manual /rx fallback.
+// - Receipts group (owner only): the manual /rx fallback.
 // - Any other group: ignored.
 // Navigation model: every screen is shown by deleting the previous
 // screen message and sending a fresh one at the bottom of the chat
@@ -536,15 +536,6 @@ async function handleDbGroupCommand(chatId, messageId, ownerId, text) {
     await showDb(chatId, ownerId, { text: 'لغو شد.' });
     return;
   }
-  if (command === '/id') {
-    // One-off, never a screen: /id must not eat the menu, and the
-    // reply deletes itself after 20 seconds.
-    await sendExpiring(
-      chatId,
-      `آیدی این چت: ${chatId}\nآیدی شما: ${ownerId}\n(این پیام بعد از ۲۰ ثانیه پاک می‌شود.)`,
-    );
-    return;
-  }
   if (command === '/help') {
     await showDb(chatId, ownerId, { text: DB_GROUP_HELP });
     return;
@@ -552,20 +543,13 @@ async function handleDbGroupCommand(chatId, messageId, ownerId, text) {
   return false;
 }
 
-// --- Receipts group: manual /rx fallback + /id. Buttons live in the
+// --- Receipts group: manual /rx fallback. Buttons live in the
 // callback handler. Receipts are records — never auto-deleted, except
 // rejected ones (deleted when the owner rejects them). ---
 async function handleReceiptsGroupCommand(chatId, messageId, ownerId, text) {
   await deleteMessageBestEffort(chatId, messageId);
   const parts = text.split(/\s+/);
   const command = parts[0].split('@')[0];
-  if (command === '/id') {
-    await sendExpiring(
-      chatId,
-      `آیدی این چت: ${chatId}\nآیدی شما: ${ownerId}\n(این پیام بعد از ۲۰ ثانیه پاک می‌شود.)`,
-    );
-    return true;
-  }
   if (command === '/rx') {
     const mid = Number(parts[1] || 0);
     const decision = String(parts[2] || '').toLowerCase();
@@ -994,14 +978,14 @@ export default async function (message, ctx) {
       return;
     }
 
-    // The receipts group is owner-only: only /id and /rx matter here.
+    // The receipts group is owner-only: only /rx matters here.
     if (isReceiptsGroup(chatId)) {
       if (!isOwner(userId)) return;
       await trackUser(from, null);
       if (text.startsWith('/')) {
         const handled = await handleReceiptsGroupCommand(chatId, messageId, userId, text);
         if (handled !== false) return;
-        await sendExpiring(chatId, 'این دستور را نمی‌شناسم. /id یا /rx <شماره پیام> ok|no');
+        await sendExpiring(chatId, 'این دستور را نمی‌شناسم. /rx <شماره پیام> ok|no');
         return;
       }
       return;
@@ -1106,15 +1090,6 @@ export default async function (message, ctx) {
           return;
         }
         await showStats(chatId, userId);
-        return;
-      }
-      if (command === '/id') {
-        // One-off, never a screen: /id must not eat the menu, and the
-        // reply deletes itself after 20 seconds.
-        await sendExpiring(
-          chatId,
-          `آیدی این چت: ${chatId}\nآیدی شما: ${userId}\n(این پیام بعد از ۲۰ ثانیه پاک می‌شود.)`,
-        );
         return;
       }
       if (command === '/support') {

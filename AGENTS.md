@@ -1,11 +1,17 @@
-# AGENTS.md — ErffanHub Files v2 (v2.1.0)
+# AGENTS.md — ErffanHub Files v2 (v2.2.0)
 
 ## Layout
 
 - `tgcloud/` — Telegram Serverless bot only: SQLite database,
-  handlers, shared code. No `endpoints/`, no Mini App, no Worker.
+  handlers, shared code. No Mini App, no Worker.
 - `tgcloud/handlers/` — `message.js` (private chat + DB group +
   receipts group), `callback_query.js` (all buttons). No other handlers.
+- `tgcloud/endpoints/` — `cleanup.js` (the timer endpoint, called by
+  the Cloudflare Worker cron with the owner's signed init data).
+- `cleanup-worker/` — a Cloudflare Worker cron (once a minute) that
+  calls the `cleanup` endpoint. Lives OUTSIDE `tgcloud/`, so
+  `tgcloud push` never deploys it as bot code; it is deployed
+  separately with `wrangler deploy`.
 - `tgcloud/lib/` — `config.js` (ids, urls, socials, card number —
   placeholders in the repo), `auth.js` (owner gate), `pure.js`
   (testable helpers), `format.js`, `keyboards.js`, `views.js`,
@@ -33,14 +39,29 @@
   them.
 - Self-deleting messages (v2.1): delivered files delete themselves
   60s after delivery (`FILE_TTL_SEC`), one-off notices 20s after
-  (`NOTICE_TTL_SEC`). Telegram Serverless has NO timer or cron and
-  endpoints are Mini-App-only, so expiry is enforced lazily: both
-  handlers call `runCleanup()` on every incoming update, which
+  (`NOTICE_TTL_SEC`). The sweep (`runCleanup`, in `lib/library.js`)
   deletes the due rows of the `expiring_messages` table (best-effort)
-  and drops the rows either way. `/id` is a one-off expiring message,
-  never a screen — it used to replace the screen (eating the menu)
-  and stay forever. The file caption tells the reader it will be
-  deleted in 1 minute.
+  and drops the rows either way. The file caption tells the reader
+  it will be deleted in 1 minute.
+- The timer (v2.2): Telegram Serverless has NO timer or cron and
+  endpoints are Mini-App-only, so expiry is swept two ways. (1)
+  Lazily: both handlers call `runCleanup()` on every incoming
+  update — this always works and is the fallback. (2) On a real
+  timer: the `cleanup` endpoint (owner-only, `ctx.initData.user.id`
+  must be the owner) runs the same sweep, and the Cloudflare Worker
+  in `cleanup-worker/` calls it once a minute with the owner's
+  signed init data — `Authorization: TMA <base64(initData)>`, the
+  exact wire format of the Mini App SDK (read from
+  telegram-web-app.js), HMAC-SHA256 per Telegram's validation spec
+  (pinned by `test/worker.test.js`). The platform verifies the
+  signature before the endpoint runs; if it ever refuses the call
+  (401 — e.g. it also checks for a live Mini App session), the lazy
+  sweep still applies and nothing breaks. The Worker needs
+  `BOT_TOKEN` (BotFather API token, a Worker secret) and `OWNER_ID`
+  (wrangler.toml var) — never commit either.
+  There is no `/id` command: it was removed entirely at the owner's
+  request (2026-11-07). Group ids come from @userinfobot /
+  @getmyid_bot.
 - Buttons: every screen ends the same way — content rows, pager row
   when paging, a generic «◀ بازگشت» row, then «🏠 منوی اصلی». The
   back button is always generic, never named after the previous

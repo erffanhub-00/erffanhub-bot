@@ -1,0 +1,16 @@
+name = "erffanhub-cleanup"
+main = "worker.js"
+compatibility_date = "2026-11-07"
+
+# Once a minute. Workers Free includes cron triggers, no card needed.
+[triggers]
+crons = ["* * * * *"]
+
+[vars]
+# The bot's Mini App host (the app id is public; the host serves the
+# cleanup endpoint at /api/cleanup).
+APP_URL = "https://app8692409054.tgcloud.ai"
+# Your Telegram user id — the bot owner's id, the same number as
+# OWNER_TELEGRAM_ID in tgcloud/lib/config.js. Fill it in (0 refuses
+# every call: the endpoint is owner-only).
+OWNER_ID = "0"

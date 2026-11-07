@@ -1,4 +1,4 @@
-# ErffanHub Files — v2.1.0
+# ErffanHub Files — v2.2.0
 
 A public Telegram bot on **Telegram Serverless** (no server, no
 Cloudflare Worker, no Mini App): a showcase + file library + wallet
@@ -58,10 +58,12 @@ for Erfan.
   so the active screen is always the last message. The user's own
   command/text messages are deleted after handling. Delivered files
   delete themselves 60 seconds after delivery (the caption says so)
-  and one-off notices (wallet charged, receipt rejected, `/id`
-  replies) after 20 seconds. Telegram Serverless has no timer, so
-  expiry is swept on every incoming update — in active use a file is
-  gone within a minute of its expiry. Every screen ends
+  and one-off notices (wallet charged, receipt rejected) after 20
+  seconds. Telegram Serverless has no timer, so deletion is swept
+  two ways: lazily on every use of the bot, and on a real timer by
+  the tiny Cloudflare Worker in `cleanup-worker/` (once a minute —
+  see its README; if the platform ever refuses its signed call, the
+  lazy sweep still applies). Every screen ends
   with a generic «◀ بازگشت» button and «🏠 منوی اصلی».
 - **Support:** every user has «💬 پیام به پشتیبانی» in the main menu
   (and `/support`). Their message (text, photo or file) is forwarded
@@ -87,10 +89,9 @@ for Erfan.
    as a **member in the public group**.
 3. **Fill `tgcloud/lib/config.js`:** `OWNER_TELEGRAM_ID`,
    `CHANNEL_ID`, `GROUP_ID`, `DB_GROUP_ID`, `RECEIPTS_GROUP_ID`,
-   `CHANNEL_URL`, `GROUP_URL`, `CARD_NUMBER`. Get the ids with `/id`
-   after the first deploy, or from @userinfobot / @getmyid_bot. The
-   repo copy keeps placeholders (`0` / `''`) — never commit real ids
-   or the card number.
+   `CHANNEL_URL`, `GROUP_URL`, `CARD_NUMBER`. Get the ids from
+   @userinfobot / @getmyid_bot. The repo copy keeps placeholders
+   (`0` / `''`) — never commit real ids or the card number.
 4. **Deploy:**
    ```sh
    npm install
@@ -115,7 +116,6 @@ for Erfan.
 - `/wallet` — wallet balance, top-up and my transactions
 - `/support` — message the owner (support)
 - `/stats` — owner-only stats (files + users + wallet + notify + database)
-- `/id` — this chat's id and your Telegram id (the reply deletes itself after 20 seconds)
 - `/help` — help
 
 DB group (owner only):
