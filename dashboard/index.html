@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>داشبورد مدیریت — ErffanHub Files</title>
+<link rel="stylesheet" href="styles.css">
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>🖥️ داشبورد مدیریت</h1>
+    <p id="subtitle">ErffanHub Files — فقط مالک</p>
+  </header>
+
+  <nav id="tabs" role="tablist">
+    <button data-tab="stats" class="active">📊 آمار</button>
+    <button data-tab="users">👥 کاربران</button>
+    <button data-tab="files">📁 فایل‌ها</button>
+    <button data-tab="tx">💰 تراکنش‌ها</button>
+    <button data-tab="receipts">🧾 رسیدها</button>
+    <button data-tab="support">💬 پشتیبانی</button>
+    <button data-tab="broadcast">📣 اطلاع‌رسانی</button>
+    <button data-tab="db">🗄️ دیتابیس</button>
+  </nav>
+
+  <main id="content">
+    <p class="muted">در حال بارگذاری…</p>
+  </main>
+
+  <footer>
+    <span id="cleanup-note">پاک‌سازی خودکار پیام‌ها هر ۳۰ ثانیه فعال است.</span>
+    <button id="refresh" type="button">↻ تازه‌سازی</button>
+  </footer>
+</div>
+
+<div id="toast" role="status"></div>
+
+<script src="app.js"></script>
+</body>
+</html>

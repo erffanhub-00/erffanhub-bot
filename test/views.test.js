@@ -304,6 +304,15 @@ test('main menu shows the notify button only to the owner, and support to everyo
   assert.ok(userKb.some((b) => b.callback_data === 'm:support'));
 });
 
+test('main menu shows the dashboard web-app button only to the owner', () => {
+  const ownerKb = mainMenu(true).inline_keyboard.flat();
+  const userKb = mainMenu(false).inline_keyboard.flat();
+  const dash = ownerKb.find((b) => b.text === '🖥️ داشبورد مدیریت');
+  assert.ok(dash);
+  assert.equal(dash.web_app.url, 'https://app8692409054.tgcloud.ai/');
+  assert.ok(!userKb.some((b) => b.text === '🖥️ داشبورد مدیریت'));
+});
+
 test('notify audience view offers all, one file, and one user', () => {
   const view = notifyAudienceView();
   const buttons = view.reply_markup.inline_keyboard.flat();

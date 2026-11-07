@@ -1,6 +1,6 @@
 import { table, integer, text, sql } from 'sdk/db';
 
-// ErffanHub Files v2.1 database. No foreign keys: the runtime runs with
+// ErffanHub Files v2.3 database. No foreign keys: the runtime runs with
 // PRAGMA foreign_keys off, so integrity is the application's job.
 // Timestamps are epoch milliseconds (Date.now()) unless noted.
 // User data: everything stored about a user comes from what Telegram
@@ -127,6 +127,8 @@ export const github_cache = table('github_cache', {
 // Telegram refuses, must not be retried forever. The table is only
 // swept when an update arrives (there is no timer on Serverless),
 // so a message disappears on the next use of the bot at the earliest.
+// (v2.2 adds the Worker cron + the cleanup endpoint, and the v2.3
+// dashboard calls cleanup every 30s while it is open.)
 export const expiring_messages = table('expiring_messages', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   chat_id: integer('chat_id'),
@@ -135,4 +137,21 @@ export const expiring_messages = table('expiring_messages', {
   delete_at: integer('delete_at'),
   // 'file' (a delivered file part) or 'notice' (a one-off message).
   kind: text('kind'),
+});
+
+// Support messages from users, stored so the owner's dashboard has
+// an inbox (the bot also forwards each one to the owner in Telegram).
+// Media is NOT stored here — only the kind and the text/caption, so
+// no file bytes or bot-token-exposing links ever leave the server.
+// A reply is sent from the dashboard (or from the forwarded message's
+// reply button) and marks the row answered.
+export const support_messages = table('support_messages', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  user_id: integer('user_id'),
+  username: text('username'),
+  // 'text' | 'photo' | 'document' | 'other'.
+  kind: text('kind'),
+  text: text('text'),
+  answered: integer('answered').notNull().default(0),
+  created_at: integer('created_at').default(sql`(unixepoch())`),
 });

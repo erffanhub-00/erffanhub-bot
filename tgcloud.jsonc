@@ -1,7 +1,12 @@
 {
   // The $schema line is for editor help only; tgcloud reads the rest.
   "$schema": "./node_modules/@tgcloud/cli/schema/tgcloud.json",
-  // Bot-only: no Mini App. "static": false removes a previously
-  // deployed site (app<id>.tgcloud.ai) on the next push.
-  "static": false
+  // The owner dashboard (Mini App) is served from the dashboard/
+  // folder at https://app<id>.tgcloud.ai/. "spa" serves index.html
+  // for paths that don't exist, so the single-page app works on
+  // reload. The bot code itself lives in tgcloud/ as before.
+  "static": {
+    "source": "dashboard",
+    "spa": true
+  }
 }

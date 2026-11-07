@@ -4,7 +4,7 @@
 
 import { db } from 'sdk';
 import { eq } from 'sdk/db';
-import { settings, users, downloads, files, file_parts, file_versions, github_cache, wallet_transactions, expiring_messages } from '../schema.js';
+import { settings, users, downloads, files, file_parts, file_versions, github_cache, wallet_transactions, expiring_messages, support_messages } from '../schema.js';
 import { buildUserRow, nextFileId, groupCategories } from './pure.js';
 
 export async function getSetting(key) {
@@ -72,6 +72,54 @@ export async function setFilePrice(fileId, price) {
     .where(eq(files.id, fileId))
     .run();
   return getFile(fileId);
+}
+
+// Edit a file's title, description, category and price in one go
+// (owner only, from the dashboard). Only the fields given are
+// changed; price is clamped at zero. Returns the updated file.
+export async function updateFileMeta(fileId, { title, description, category, price }) {
+  const patch = { updated_at: Date.now() };
+  if (title !== undefined) patch.title = String(title || '').trim() || null;
+  if (description !== undefined) patch.description = String(description || '').trim() || null;
+  if (category !== undefined) patch.category = String(category || '').trim() || 'سایر';
+  if (price !== undefined) patch.price = Math.max(0, Number(price) || 0);
+  await db.update(files).set(patch).where(eq(files.id, fileId)).run();
+  return getFile(fileId);
+}
+
+// --- Support messages (dashboard inbox) ---
+
+export async function insertSupportMessage({ userId, username, kind, text }) {
+  await db
+    .insert(support_messages)
+    .values({
+      user_id: Number(userId) || null,
+      username: username ?? null,
+      kind: kind || 'other',
+      text: String(text || '').slice(0, 4000) || null,
+      answered: 0,
+      created_at: Math.floor(Date.now() / 1000),
+    })
+    .run();
+  return null;
+}
+
+export async function listSupportMessages() {
+  const rows = await db.select().from(support_messages).all();
+  return rows.sort((a, b) => (b.created_at || 0) - (a.created_at || 0) || (b.id || 0) - (a.id || 0));
+}
+
+export async function getSupportMessage(id) {
+  if (!id) return null;
+  return db.select().from(support_messages).where(eq(support_messages.id, Number(id))).get();
+}
+
+export async function markSupportAnswered(id) {
+  await db
+    .update(support_messages)
+    .set({ answered: 1 })
+    .where(eq(support_messages.id, Number(id)))
+    .run();
 }
 
 // --- Self-deleting messages ---
@@ -491,6 +539,7 @@ export async function getDbCounts() {
     github_cache: await count(github_cache),
     wallet_transactions: await count(wallet_transactions),
     expiring_messages: await count(expiring_messages),
+    support_messages: await count(support_messages),
   };
 }
 
@@ -510,6 +559,7 @@ export async function exportDatabase() {
       github_cache: await db.select().from(github_cache).all(),
       wallet_transactions: await listTransactions(),
       expiring_messages: await listExpiringMessages(),
+      support_messages: await listSupportMessages(),
     },
   };
 }

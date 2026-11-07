@@ -84,6 +84,21 @@ export function canAfford(balance, price) {
   return (Number(balance) || 0) >= (Number(price) || 0);
 }
 
+// Search wallet transactions by username, user id, kind, status or
+// file id. Empty query matches nothing; matching is a
+// case-insensitive substring, same as searchUsers/searchFiles.
+export function searchTransactions(rows, query) {
+  const q = String(query ?? '').trim().toLowerCase();
+  if (!q) return [];
+  const list = Array.isArray(rows) ? rows : [];
+  return list.filter((t) => {
+    const hay = [String(t.user_id ?? ''), t.username || '', t.kind || '', t.status || '', t.file_id || '']
+      .join(' ')
+      .toLowerCase();
+    return hay.includes(q);
+  });
+}
+
 // Search users by name, username or id. `users` rows carry
 // { user_id, username, first_name, last_name }. Empty query matches
 // nothing; matching is a case-insensitive substring.

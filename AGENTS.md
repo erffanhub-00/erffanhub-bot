@@ -1,13 +1,19 @@
-# AGENTS.md — ErffanHub Files v2 (v2.2.0)
+# AGENTS.md — ErffanHub Files v2 (v2.3.0)
 
 ## Layout
 
 - `tgcloud/` — Telegram Serverless bot only: SQLite database,
-  handlers, shared code. No Mini App, no Worker.
+  handlers, shared code.
 - `tgcloud/handlers/` — `message.js` (private chat + DB group +
   receipts group), `callback_query.js` (all buttons). No other handlers.
 - `tgcloud/endpoints/` — `cleanup.js` (the timer endpoint, called by
-  the Cloudflare Worker cron with the owner's signed init data).
+  the Cloudflare Worker cron with the owner's signed init data) and
+  `admin*.js` (the owner's dashboard endpoints — every one checks
+  `requireOwner` first; see `lib/admin.js`).
+- `dashboard/` — the owner's Mini App dashboard (plain HTML/CSS/JS,
+  no build step), served at `https://app<id>.tgcloud.ai/` via
+  `tgcloud.jsonc` `"static": { "source": "dashboard" }`. Opened from
+  the «🖥️ داشبورد مدیریت» web_app button in the owner's main menu.
 - `cleanup-worker/` — a Cloudflare Worker cron (once a minute) that
   calls the `cleanup` endpoint. Lives OUTSIDE `tgcloud/`, so
   `tgcloud push` never deploys it as bot code; it is deployed
@@ -44,7 +50,7 @@
   and drops the rows either way. The file caption tells the reader
   it will be deleted in 1 minute.
 - The timer (v2.2): Telegram Serverless has NO timer or cron and
-  endpoints are Mini-App-only, so expiry is swept two ways. (1)
+  endpoints are Mini-App-only, so expiry is swept three ways. (1)
   Lazily: both handlers call `runCleanup()` on every incoming
   update — this always works and is the fallback. (2) On a real
   timer: the `cleanup` endpoint (owner-only, `ctx.initData.user.id`
@@ -58,7 +64,9 @@
   (401 — e.g. it also checks for a live Mini App session), the lazy
   sweep still applies and nothing breaks. The Worker needs
   `BOT_TOKEN` (BotFather API token, a Worker secret) and `OWNER_ID`
-  (wrangler.toml var) — never commit either.
+  (wrangler.toml var) — never commit either. (3) The dashboard
+  (v2.3): while it is open it calls `cleanup` every 30s — a timer
+  that needs no extra setup at all.
   There is no `/id` command: it was removed entirely at the owner's
   request (2026-11-07). Group ids come from @userinfobot /
   @getmyid_bot.
@@ -139,7 +147,7 @@
   clamps at zero and the signed delta is recorded in
   `wallet_transactions` as kind 'adjust' (shown as «تغییر دستی»).
 - Database management (v2.1): «🗄️ مدیریت دیتابیس» in `/stats`
-  shows row counts for all 9 tables (`getDbCounts`), «💾 دانلود
+  shows row counts for all 10 tables (`getDbCounts`), «💾 دانلود
   پشتیبان (JSON)» sends a full dump as a file (JSON built in memory,
   `new InputFile(bytes, name, { type: 'application/json' })` —
   no filesystem on Serverless), and confirm-guarded clears for
@@ -152,13 +160,27 @@
 - GitHub projects are fetched live (public API, no token) and cached
   in `github_cache`. A failed fetch shows the cached list with its
   date; the bot never fails `/start` because of GitHub.
+- Dashboard (v2.3): plain HTML/CSS/JS in `dashboard/`, no bundler,
+  Telegram theme variables so it looks native. Tabs: stats, users,
+  files, transactions, receipts, support, broadcast, database.
+  Tables page at 20 rows (`ADMIN_PAGE_SIZE` in `lib/admin.js`) and
+  search with the pure `searchUsers`/`searchFiles`/
+  `searchTransactions` helpers. Support messages are stored in the
+  new `support_messages` table (kind + text/caption only — no media
+  bytes, no file ids, so nothing token-exposing ever leaves the
+  server); the bot also forwards each one to the owner in Telegram
+  as before. Every dashboard endpoint is owner-only
+  (`requireOwner`); the front-end shows a "فقط مالک" panel on
+  'forbidden'. Schema: 10 tables. The main menu has an owner-only
+  web_app button («🖥️ داشبورد مدیریت», `DASHBOARD_URL` in config.js
+  — public URL, not a secret).
 - Persian RTL UI. Clean code, no emoji/banner decoration in code, no
-  TODOs, no dead code. Schema: 9 tables (settings, files,
+  TODOs, no dead code. Schema: 10 tables (settings, files,
   file_parts, file_versions, downloads, users, github_cache,
-  wallet_transactions, expiring_messages), no foreign keys. `files`
-  has `category` and `price` columns; `users` has nullable `phone`
-  and `balance` columns. Do not change `tgcloud/schema.js` without a
-  migration plan.
+  wallet_transactions, expiring_messages, support_messages), no
+  foreign keys. `files` has `category` and `price` columns; `users`
+  has nullable `phone` and `balance` columns. Do not change
+  `tgcloud/schema.js` without a migration plan.
 - Pending owner/user input lives in `settings` keys (`pending_*`),
   same pattern as the erffanhub-bot builds.
 

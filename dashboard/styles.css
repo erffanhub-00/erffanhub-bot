@@ -1,0 +1,200 @@
+/* ErffanHub Files — owner dashboard. Uses Telegram theme variables
+   so it looks native inside Telegram; falls back to a clean light
+   theme when opened elsewhere. Persian RTL. */
+
+:root {
+  --bg: var(--tg-theme-bg-color, #ffffff);
+  --text: var(--tg-theme-text-color, #1c1c1e);
+  --hint: var(--tg-theme-hint-color, #8e8e93);
+  --link: var(--tg-theme-link-color, #007aff);
+  --button: var(--tg-theme-button-color, #007aff);
+  --button-text: var(--tg-theme-button-text-color, #ffffff);
+  --secondary: var(--tg-theme-secondary-bg-color, #f2f2f7);
+  --border: #e5e5ea;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, "Segoe UI", Tahoma, sans-serif;
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+#app { max-width: 960px; margin: 0 auto; padding: 12px 14px 40px; }
+
+header h1 { font-size: 20px; margin: 4px 0 0; }
+header p { color: var(--hint); margin: 0 0 10px; font-size: 13px; }
+
+#tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+#tabs button {
+  border: 1px solid var(--border);
+  background: var(--secondary);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+#tabs button.active {
+  background: var(--button);
+  color: var(--button-text);
+  border-color: var(--button);
+}
+
+main { min-height: 200px; }
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.card {
+  background: var(--secondary);
+  border-radius: 12px;
+  padding: 12px;
+}
+
+.card .num { font-size: 22px; font-weight: 700; }
+.card .lbl { color: var(--hint); font-size: 13px; }
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 10px 0;
+  font-size: 14px;
+}
+
+th, td {
+  text-align: right;
+  padding: 8px 6px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+  word-break: break-word;
+}
+
+th { color: var(--hint); font-weight: 600; font-size: 13px; }
+
+.toolbar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin: 8px 0;
+}
+
+input[type="search"], input[type="text"], input[type="number"], textarea, select {
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  width: 100%;
+}
+
+input[type="search"] { max-width: 280px; }
+
+button, .btn {
+  font: inherit;
+  border: 1px solid var(--border);
+  background: var(--secondary);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 7px 14px;
+  cursor: pointer;
+}
+
+button.primary, .btn.primary {
+  background: var(--button);
+  color: var(--button-text);
+  border-color: var(--button);
+}
+
+button.danger { color: #d70015; border-color: #f0b4b8; }
+button.small { padding: 4px 10px; font-size: 13px; }
+
+button:disabled { opacity: 0.5; cursor: default; }
+
+.pager {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 10px 0;
+  color: var(--hint);
+  font-size: 14px;
+}
+
+.panel {
+  background: var(--secondary);
+  border-radius: 12px;
+  padding: 14px;
+  margin: 12px 0;
+}
+
+.panel h3 { margin: 0 0 8px; font-size: 16px; }
+
+.field { margin: 10px 0; }
+.field label { display: block; font-size: 13px; color: var(--hint); margin-bottom: 4px; }
+
+.muted { color: var(--hint); }
+.ok { color: #248a3d; }
+.bad { color: #d70015; }
+.badge {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 12px;
+  background: var(--secondary);
+  border: 1px solid var(--border);
+}
+.badge.green { background: #e3f6e8; color: #1c7c33; border-color: #bfe8c8; }
+.badge.red { background: #fde8e8; color: #b3261e; border-color: #f5c2c2; }
+.badge.amber { background: #fff4d6; color: #8a6100; border-color: #f0dc9e; }
+
+footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-top: 18px;
+  color: var(--hint);
+  font-size: 13px;
+}
+
+#toast {
+  position: fixed;
+  bottom: 18px;
+  right: 50%;
+  transform: translateX(50%);
+  background: var(--text);
+  color: var(--bg);
+  padding: 10px 16px;
+  border-radius: 999px;
+  font-size: 14px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s;
+  max-width: 90vw;
+  text-align: center;
+}
+
+#toast.show { opacity: 1; }
+
+@media (max-width: 640px) {
+  table { font-size: 13px; }
+  #content { overflow-x: auto; }
+  .cards { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); }
+}

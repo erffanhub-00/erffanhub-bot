@@ -26,6 +26,7 @@ import {
   NOTICE_TTL_SEC,
   expiredRows,
   fileDownloaders,
+  searchTransactions,
 } from '../tgcloud/lib/pure.js';
 
 test('formatToman renders Persian thousands with the تومان suffix', () => {
@@ -392,4 +393,18 @@ test('fileDownloaders returns unique downloaders of one file, newest first', () 
   assert.deepEqual(fileDownloaders(rows, 'F002'), [333]);
   assert.deepEqual(fileDownloaders(rows, 'F999'), []);
   assert.deepEqual(fileDownloaders(null, 'F001'), []);
+});
+
+test('searchTransactions matches username, kind, status and file id', () => {
+  const rows = [
+    { user_id: 111, username: 'ali', kind: 'charge', amount: 50000, status: 'approved', file_id: null },
+    { user_id: 222, username: null, kind: 'purchase', amount: -20000, status: 'approved', file_id: 'F001' },
+    { user_id: 333, username: 'sara', kind: 'adjust', amount: 5000, status: 'approved', file_id: null },
+  ];
+  assert.deepEqual(searchTransactions(rows, 'ali').map((r) => r.user_id), [111]);
+  assert.deepEqual(searchTransactions(rows, 'F001').map((r) => r.user_id), [222]);
+  assert.deepEqual(searchTransactions(rows, 'adjust').map((r) => r.user_id), [333]);
+  assert.deepEqual(searchTransactions(rows, '222').map((r) => r.user_id), [222]);
+  assert.deepEqual(searchTransactions(rows, ''), []);
+  assert.deepEqual(searchTransactions(null, 'ali'), []);
 });

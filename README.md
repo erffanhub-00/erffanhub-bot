@@ -1,4 +1,4 @@
-# ErffanHub Files — v2.2.0
+# ErffanHub Files — v2.3.0
 
 A public Telegram bot on **Telegram Serverless** (no server, no
 Cloudflare Worker, no Mini App): a showcase + file library + wallet
@@ -69,12 +69,17 @@ for Erfan.
   (and `/support`). Their message (text, photo or file) is forwarded
   to the owner, who answers from the «✏️ پاسخ» button; the reply is
   forwarded back to the user.
-- **Owner admin:** «📣 اطلاع‌رسانی» in the main menu (audience:
-  everyone, one file's downloaders, or one user); on a user profile,
-  «💰 تغییر موجودی» sets the balance by hand (recorded in the ledger
-  as a manual adjustment); «🗄️ مدیریت دیتابیس» in `/stats` shows row
-  counts for all tables, downloads a full JSON backup, and clears
-  download history / the GitHub cache.
+- **Owner dashboard (Mini App):** the owner has a «🖥️ داشبورد مدیریت»
+  button in the main menu that opens a full management dashboard
+  (hosted by the same app, `dashboard/`): stats, users (search +
+  balance fix + message), files (search + edit title/description/
+  category/price + delete), transactions, pending receipts
+  (approve/reject), support inbox (reply), broadcast (all / one
+  file's downloaders / one user), database (table counts, JSON
+  backup, clear downloads/cache). Every endpoint checks the caller
+  is the owner. While the dashboard is open it calls the `cleanup`
+  endpoint every 30 seconds, so self-deleting messages are swept on
+  a real timer with no extra setup.
 
 ## Setup
 
@@ -116,6 +121,7 @@ for Erfan.
 - `/wallet` — wallet balance, top-up and my transactions
 - `/support` — message the owner (support)
 - `/stats` — owner-only stats (files + users + wallet + notify + database)
+- `🖥️ داشبورد مدیریت` — owner-only Mini App dashboard (button in the main menu)
 - `/help` — help
 
 DB group (owner only):

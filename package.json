@@ -1,1 +1,17 @@
-{"description":"ErffanHub Files — public Telegram file-library bot (GitHub showcase, force-join, file library with versions, wallet + premium files) on Telegram Serverless.","devDependencies":{"@tgcloud/cli":"^0.2.0"},"engines":{"node":">=18"},"name":"erffanhub-bot","private":true,"scripts":{"check":"node --check tgcloud/schema.js && node --check tgcloud/lib/config.js && node --check tgcloud/lib/auth.js && node --check tgcloud/lib/pure.js && node --check tgcloud/lib/format.js && node --check tgcloud/lib/keyboards.js && node --check tgcloud/lib/views.js && node --check tgcloud/lib/store.js && node --check tgcloud/lib/library.js && node --check tgcloud/lib/github.js && node --check tgcloud/handlers/message.js && node --check tgcloud/handlers/callback_query.js","test":"node --test \"test/*.test.js\""},"type":"module","version":"2.2.0"}
+{
+  "description": "ErffanHub Files \u2014 public Telegram file-library bot (GitHub showcase, force-join, file library with versions, wallet + premium files) on Telegram Serverless.",
+  "devDependencies": {
+    "@tgcloud/cli": "^0.2.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "name": "erffanhub-bot",
+  "private": true,
+  "scripts": {
+    "check": "node --check tgcloud/schema.js && node --check tgcloud/lib/config.js && node --check tgcloud/lib/auth.js && node --check tgcloud/lib/pure.js && node --check tgcloud/lib/format.js && node --check tgcloud/lib/keyboards.js && node --check tgcloud/lib/views.js && node --check tgcloud/lib/store.js && node --check tgcloud/lib/library.js && node --check tgcloud/lib/github.js && node --check tgcloud/lib/admin.js && node --check tgcloud/handlers/message.js && node --check tgcloud/handlers/callback_query.js && node --check tgcloud/endpoints/cleanup.js && node --check tgcloud/endpoints/adminStats.js && node --check tgcloud/endpoints/adminUsers.js && node --check tgcloud/endpoints/adminUser.js && node --check tgcloud/endpoints/adminSetBalance.js && node --check tgcloud/endpoints/adminMessage.js && node --check tgcloud/endpoints/adminFiles.js && node --check tgcloud/endpoints/adminFile.js && node --check tgcloud/endpoints/adminEditFile.js && node --check tgcloud/endpoints/adminDeleteFile.js && node --check tgcloud/endpoints/adminTransactions.js && node --check tgcloud/endpoints/adminReceipts.js && node --check tgcloud/endpoints/adminSettleReceipt.js && node --check tgcloud/endpoints/adminSupport.js && node --check tgcloud/endpoints/adminSupportReply.js && node --check tgcloud/endpoints/adminBroadcast.js && node --check tgcloud/endpoints/adminDb.js && node --check tgcloud/endpoints/adminBackup.js && node --check tgcloud/endpoints/adminClear.js && node --check dashboard/app.js && node --check cleanup-worker/worker.js",
+    "test": "node --test \"test/*.test.js\""
+  },
+  "type": "module",
+  "version": "2.3.0"
+}

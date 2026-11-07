@@ -3,7 +3,7 @@
 // «◀ بازگشت» row, then «🏠 منوی اصلی». Buttons carry short callback
 // data (64-byte limit).
 
-import { CHANNEL_URL, GROUP_URL } from './config.js';
+import { CHANNEL_URL, GROUP_URL, DASHBOARD_URL } from './config.js';
 import { formatToman } from './pure.js';
 
 // Append the standard bottom rows: generic back, then main menu.
@@ -44,6 +44,9 @@ export function mainMenu(owner, balance) {
   if (owner) {
     rows.push([{ text: '📊 آمار من', callback_data: 'm:stats' }]);
     rows.push([{ text: '📣 اطلاع‌رسانی', callback_data: 'm:notify' }]);
+    if (DASHBOARD_URL) {
+      rows.push([{ text: '🖥️ داشبورد مدیریت', web_app: { url: DASHBOARD_URL } }]);
+    }
   }
   rows.push([{ text: 'راهنما', callback_data: 'm:help' }]);
   return { inline_keyboard: rows };

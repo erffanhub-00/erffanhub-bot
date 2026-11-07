@@ -48,6 +48,7 @@ import {
   insertTransaction,
   getTransactionByReceiptMessage,
   getUserDownloads,
+  insertSupportMessage,
 } from '../lib/store.js';
 import {
   checkMembership,
@@ -841,6 +842,18 @@ async function handlePendingSupport(chatId, message, userId, from) {
     });
   } catch {
     // The owner is unreachable; the user still gets an answer below.
+  }
+  // Store it for the dashboard inbox (text/caption only — no media
+  // bytes, no file ids). The forwarded copy above is the full one.
+  try {
+    await insertSupportMessage({
+      userId,
+      username: from.username || null,
+      kind: message.photo ? 'photo' : message.document ? 'document' : message.text ? 'text' : 'other',
+      text: (message.text || message.caption || '').trim(),
+    });
+  } catch {
+    // The inbox is a bonus; a failed insert must not break the reply.
   }
   await deleteMessageBestEffort(chatId, message.message_id);
   await showPrivate(chatId, userId, {
