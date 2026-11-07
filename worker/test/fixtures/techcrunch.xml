@@ -1,0 +1,389 @@
+<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"
+	xmlns:content="http://purl.org/rss/1.0/modules/content/"
+	xmlns:wfw="http://wellformedweb.org/CommentAPI/"
+	xmlns:dc="http://purl.org/dc/elements/1.1/"
+	xmlns:atom="http://www.w3.org/2005/Atom"
+	xmlns:sy="http://purl.org/rss/1.0/modules/syndication/"
+	xmlns:slash="http://purl.org/rss/1.0/modules/slash/"
+	>
+
+<channel>
+	<title>TechCrunch</title>
+	<atom:link href="https://techcrunch.com/feed/" rel="self" type="application/rss+xml" />
+	<link>https://techcrunch.com/</link>
+	<description>Startup and Technology News</description>
+	<lastBuildDate>Sat, 07 Nov 2026 05:05:49 +0000</lastBuildDate>
+	<language>en-US</language>
+	<sy:updatePeriod>
+	hourly	</sy:updatePeriod>
+	<sy:updateFrequency>
+	1	</sy:updateFrequency>
+	<generator>https://wordpress.org/?v=6.9.11</generator>
+
+<image>
+	<url>https://techcrunch.com/wp-content/uploads/2015/02/cropped-cropped-favicon-gradient.png?w=32</url>
+	<title>TechCrunch</title>
+	<link>https://techcrunch.com/</link>
+	<width>32</width>
+	<height>32</height>
+</image> 
+	<item>
+		<title>Sequoia shutting down its Scouts program marks the end of an era</title>
+		<link>https://techcrunch.com/2026/11/06/sequoia-shutting-down-its-scouts-program-marks-the-end-of-an-era/</link>
+		
+		<dc:creator><![CDATA[Anna Heim]]></dc:creator>
+		<pubDate>Sat, 07 Nov 2026 05:01:54 +0000</pubDate>
+				<category><![CDATA[Venture]]></category>
+		<category><![CDATA[scout programs]]></category>
+		<category><![CDATA[Sequoia Capital]]></category>
+		<guid isPermaLink="false">https://techcrunch.com/?p=3186038</guid>
+
+					<description><![CDATA[Sequoia pioneered the scouts model and many VC firms followed suit, but a consensus now seems to be forming that the model has reached limits in its current form.]]></description>
+		
+		
+		
+			</item>
+		<item>
+		<title>From the front row to the hot seat — what the midterms mean for Big Tech</title>
+		<link>https://techcrunch.com/2026/11/06/from-the-front-row-to-the-hot-seat-what-the-midterms-mean-for-big-tech/</link>
+		
+		<dc:creator><![CDATA[Dominic-Madori Davis]]></dc:creator>
+		<pubDate>Sat, 07 Nov 2026 04:16:43 +0000</pubDate>
+				<category><![CDATA[TC]]></category>
+		<category><![CDATA[Government & Policy]]></category>
+		<category><![CDATA[AI]]></category>
+		<guid isPermaLink="false">https://techcrunch.com/?p=3186018</guid>
+
+					<description><![CDATA[After spending two years getting cozy with the White House, Big Tech is suddenly trying to make friends with Democrats, and the open question is whether that image makeover can hold up against what states, local communities, and the markets are about to do.]]></description>
+		
+		
+		
+			</item>
+		<item>
+		<title>Crusoe sells troubled Wyoming data center project to Google</title>
+		<link>https://techcrunch.com/2026/11/06/crusoe-sells-troubled-wyoming-data-center-project-to-google/</link>
+		
+		<dc:creator><![CDATA[Marina Temkin]]></dc:creator>
+		<pubDate>Sat, 07 Nov 2026 01:40:28 +0000</pubDate>
+				<category><![CDATA[AI]]></category>
+		<category><![CDATA[ai infrastructure]]></category>
+		<category><![CDATA[crusoe]]></category>
+		<category><![CDATA[datacenter]]></category>
+		<category><![CDATA[Google]]></category>
+		<guid isPermaLink="false">https://techcrunch.com/?p=3186051</guid>
+
+					<description><![CDATA[The deal highlights the challenges of developing massive AI data centers.]]></description>
+		
+		
+		
+			</item>
+		<item>
+		<title>OpenAI reportedly raises an additional $11 billion at a $1.25 trillion valuation</title>
+		<link>https://techcrunch.com/2026/11/06/openai-reportedly-raises-an-additional-11-billion-at-a-1-25-trillion-valuation/</link>
+		
+		<dc:creator><![CDATA[Lucas Ropek]]></dc:creator>
+		<pubDate>Fri, 06 Nov 2026 22:53:46 +0000</pubDate>
+				<category><![CDATA[AI]]></category>
+		<category><![CDATA[Anthropic]]></category>
+		<category><![CDATA[fundraising]]></category>
+		<category><![CDATA[In Brief]]></category>
+		<category><![CDATA[OpenAI]]></category>
+		<guid isPermaLink="false">https://techcrunch.com/?p=3186034</guid>
+
+					<description><![CDATA[OpenAI has reportedly raised an additional $11 billion as part of a funding round that hasn't closed yet but is expected to in the coming weeks. ]]></description>
+		
+		
+		
+			</item>
+		<item>
+		<title>The Duo apps are coming, says Apple</title>
+		<link>https://techcrunch.com/2026/11/06/the-duo-apps-are-coming-says-apple/</link>
+		
+		<dc:creator><![CDATA[Sarah Perez]]></dc:creator>
+		<pubDate>Fri, 06 Nov 2026 21:38:05 +0000</pubDate>
+				<category><![CDATA[Apps]]></category>
+		<category><![CDATA[Apple]]></category>
+		<category><![CDATA[developers]]></category>
+		<category><![CDATA[foldable]]></category>
+		<category><![CDATA[iPhone]]></category>
+		<guid isPermaLink="false">https://techcrunch.com/?p=3186020</guid>
+
+					<description><![CDATA[There are now 100,000 Duo-optimized apps, says Apple, and thousands more arrive daily. ]]></description>
+		
+		
+		
+			</item>
+		<item>
+		<title>Hundreds of Artex AI hacking tools found publicly exposed to the web</title>
+		<link>https://techcrunch.com/2026/11/06/hundreds-of-artex-ai-hacking-tools-found-publicly-exposed-to-the-web/</link>
+		
+		<dc:creator><![CDATA[Zack Whittaker]]></dc:creator>
+		<pubDate>Fri, 06 Nov 2026 18:44:38 +0000</pubDate>
+				<category><![CDATA[AI]]></category>
+		<category><![CDATA[Security]]></category>
+		<category><![CDATA[cybersecurity]]></category>
+		<category><![CDATA[cyberattack]]></category>
+		<category><![CDATA[artex]]></category>
+		<guid isPermaLink="false">https://techcrunch.com/?p=3185905</guid>
+
+					<description><![CDATA[Security researchers found hundreds of servers hosting the penetration testing tool Artex exposed to the internet, allowing anyone access to the hacking tool.]]></description>
+		
+		
+		
+			</item>
+		<item>
+		<title>Meta introduces Spaces, a new way to collaborate with your Muse agent</title>
+		<link>https://techcrunch.com/2026/11/06/meta-introduces-spaces-a-new-way-to-collaborate-with-your-muse-agent/</link>
+		
+		<dc:creator><![CDATA[Lucas Ropek]]></dc:creator>
+		<pubDate>Fri, 06 Nov 2026 18:44:20 +0000</pubDate>
+				<category><![CDATA[AI]]></category>
+		<category><![CDATA[agents]]></category>
+		<category><![CDATA[Mark Zuckerberg]]></category>
+		<category><![CDATA[Meta]]></category>
+		<category><![CDATA[muse]]></category>
+		<guid isPermaLink="false">https://techcrunch.com/?p=3185929</guid>
+
+					<description><![CDATA[Meta's Muse agents continue to get new features and integrations. Spaces promises to be a new way to interact with the AI helpers.  ]]></description>
+		
+		
+		
+			</item>
+		<item>
+		<title>After the midterms, is the AI industry in for a rough two years?</title>
+		<link>https://techcrunch.com/video/after-the-midterms-is-the-ai-industry-in-for-a-rough-two-years/</link>
+		
+		<dc:creator><![CDATA[Theresa Loconsolo, Anthony Ha]]></dc:creator>
+		<pubDate>Fri, 06 Nov 2026 17:23:52 +0000</pubDate>
+				<category><![CDATA[AI]]></category>
+		<category><![CDATA[Government & Policy]]></category>
+		<category><![CDATA[CrowdStrike]]></category>
+		<category><![CDATA[data center]]></category>
+		<category><![CDATA[midterms]]></category>
+		<category><![CDATA[OpenAI]]></category>
+		<guid isPermaLink="false">https://techcrunch.com/?post_type=tc_video&#038;p=3185895</guid>
+
+					<description><![CDATA[Democrats’ historic victories in this week’s U.S. midterm elections could also transform the tech industry. The public voted on 41 data center-related ballot measures on Tuesday — in all but one, the majority voted to impose more restrictions on data center development. And even when data centers weren’t on the ballot directly, they were a [&#8230;]]]></description>
+		
+		
+		
+			</item>
+		<item>
+		<title>Pentagon offers battery startup 6K $250M loan to build US factory</title>
+		<link>https://techcrunch.com/2026/11/06/pentagon-offers-battery-startup-6k-250m-loan-to-build-u-s-factory/</link>
+		
+		<dc:creator><![CDATA[Tim De Chant]]></dc:creator>
+		<pubDate>Fri, 06 Nov 2026 16:50:01 +0000</pubDate>
+				<category><![CDATA[Climate]]></category>
+		<category><![CDATA[Government & Policy]]></category>
+		<category><![CDATA[battery materials]]></category>
+		<category><![CDATA[department of defense]]></category>
+		<category><![CDATA[In Brief]]></category>
+		<guid isPermaLink="false">https://techcrunch.com/?p=3185867</guid>
+
+					<description><![CDATA[The Pentagon has conditionally approved a $250 million loan to help 6K scale up its microwave-plasma battery material manufacturing process.
+]]></description>
+		
+		
+		
+			</item>
+		<item>
+		<title>Fox completes its $22B acquisition of Roku</title>
+		<link>https://techcrunch.com/2026/11/06/fox-completes-its-22b-acquisition-of-roku/</link>
+		
+		<dc:creator><![CDATA[Lauren Forristal]]></dc:creator>
+		<pubDate>Fri, 06 Nov 2026 16:05:36 +0000</pubDate>
+				<category><![CDATA[Media & Entertainment]]></category>
+		<category><![CDATA[Fox]]></category>
+		<category><![CDATA[In Brief]]></category>
+		<category><![CDATA[Mergers and Acquisitions]]></category>
+		<category><![CDATA[roku]]></category>
+		<guid isPermaLink="false">https://techcrunch.com/?p=3185855</guid>
+
+					<description><![CDATA[A few months after DOJ investigators were probing the deal, Fox just completed its $22B acquisition of the streaming giant Roku.]]></description>
+		
+		
+		
+			</item>
+		<item>
+		<title>Ramp data shows AI spending stalling just as Anthropic nears its IPO</title>
+		<link>https://techcrunch.com/2026/11/06/ramp-data-shows-ai-spending-stalling-just-as-anthropic-nears-its-ipo/</link>
+		
+		<dc:creator><![CDATA[Rebecca Bellan]]></dc:creator>
+		<pubDate>Fri, 06 Nov 2026 15:54:47 +0000</pubDate>
+				<category><![CDATA[AI]]></category>
+		<category><![CDATA[Enterprise]]></category>
+		<category><![CDATA[Anthropic]]></category>
+		<category><![CDATA[Enterprise AI spend]]></category>
+		<category><![CDATA[OpenAI]]></category>
+		<category><![CDATA[Ramp]]></category>
+		<guid isPermaLink="false">https://techcrunch.com/?p=3185848</guid>
+
+					<description><![CDATA[AI usage keeps climbing, but spending has stalled. Price cuts and smarter cost controls among the biggest spenders could challenge investor assumptions about AI hypergrowth.]]></description>
+		
+		
+		
+			</item>
+		<item>
+		<title>After blocking Muse, Amazon now lets users text Alexa to help them shop</title>
+		<link>https://techcrunch.com/2026/11/06/after-blocking-muse-amazon-now-lets-users-text-alexa-to-help-them-shop/</link>
+		
+		<dc:creator><![CDATA[Ivan Mehta]]></dc:creator>
+		<pubDate>Fri, 06 Nov 2026 14:10:00 +0000</pubDate>
+				<category><![CDATA[AI]]></category>
+		<category><![CDATA[Commerce]]></category>
+		<category><![CDATA[AI agents]]></category>
+		<category><![CDATA[Amazon]]></category>
+		<category><![CDATA[eCommerce]]></category>
+		<guid isPermaLink="false">https://techcrunch.com/?p=3185780</guid>
+
+					<description><![CDATA[Amazon said that the feature will roll out to millions of users in coming weeks.]]></description>
+		
+		
+		
+			</item>
+		<item>
+		<title>Underdog shows off a 32MB speech model in new demo</title>
+		<link>https://techcrunch.com/2026/11/06/underdog-shows-off-a-32mb-speech-model-in-new-demo/</link>
+		
+		<dc:creator><![CDATA[Ivan Mehta]]></dc:creator>
+		<pubDate>Fri, 06 Nov 2026 13:02:16 +0000</pubDate>
+				<category><![CDATA[AI]]></category>
+		<category><![CDATA[local AI]]></category>
+		<category><![CDATA[underdog]]></category>
+		<guid isPermaLink="false">https://techcrunch.com/?p=3185376</guid>
+
+					<description><![CDATA[Despite its small size, Underdog's new model can generate both speech and music.]]></description>
+		
+		
+		
+			</item>
+		<item>
+		<title>Physicl raises $10M to make the digital world real enough for robots</title>
+		<link>https://techcrunch.com/2026/11/06/physicl-raises-10m-to-make-the-digital-world-real-enough-for-robots/</link>
+		
+		<dc:creator><![CDATA[Tim Fernholz]]></dc:creator>
+		<pubDate>Fri, 06 Nov 2026 13:00:00 +0000</pubDate>
+				<category><![CDATA[AI]]></category>
+		<category><![CDATA[Fundraising]]></category>
+		<category><![CDATA[Robotics]]></category>
+		<category><![CDATA[iNovia Capital]]></category>
+		<category><![CDATA[physical ai]]></category>
+		<category><![CDATA[world models]]></category>
+		<guid isPermaLink="false">https://techcrunch.com/?p=3185667</guid>
+
+					<description><![CDATA[Physicl is trying to solve the sim-to-real gap with a pipeline originally built to market goods online. ]]></description>
+		
+		
+		
+			</item>
+		<item>
+		<title>Tesla will stop making the Cybertruck in 2027</title>
+		<link>https://techcrunch.com/2026/11/06/tesla-will-stop-making-the-cybertruck-in-2027/</link>
+		
+		<dc:creator><![CDATA[Sean O'Kane]]></dc:creator>
+		<pubDate>Fri, 06 Nov 2026 11:50:10 +0000</pubDate>
+				<category><![CDATA[Transportation]]></category>
+		<category><![CDATA[Cybertruck]]></category>
+		<category><![CDATA[Elon Musk]]></category>
+		<category><![CDATA[Tesla]]></category>
+		<guid isPermaLink="false">https://techcrunch.com/?p=3185749</guid>
+
+					<description><![CDATA[The decision to wind down the EV comes after just a few short years of underwhelming sales. Elon Musk said the company will use the factory space to make more Cybercabs. ]]></description>
+		
+		
+		
+			</item>
+		<item>
+		<title>At least 10 local governments have moved to drop Flock’s surveillance cameras since summer</title>
+		<link>https://techcrunch.com/2026/11/05/at-least-10-local-governments-have-moved-to-drop-flocks-surveillance-cameras-since-summer/</link>
+		
+		<dc:creator><![CDATA[Dominic-Madori Davis]]></dc:creator>
+		<pubDate>Fri, 06 Nov 2026 07:18:44 +0000</pubDate>
+				<category><![CDATA[Government & Policy]]></category>
+		<category><![CDATA[AI]]></category>
+		<category><![CDATA[Flock]]></category>
+		<category><![CDATA[surveillance technologies]]></category>
+		<guid isPermaLink="false">https://techcrunch.com/?p=3185721</guid>
+
+					<description><![CDATA[The concerns range from privacy to how data is shared (and with whom) to procurement concerns. ]]></description>
+		
+		
+		
+			</item>
+		<item>
+		<title>Palo Alto Networks in talks to buy AI agent security startup Clutch for $500M</title>
+		<link>https://techcrunch.com/2026/11/05/palo-alto-networks-in-talks-to-buy-ai-agent-security-startup-clutch-for-500m/</link>
+		
+		<dc:creator><![CDATA[Marina Temkin]]></dc:creator>
+		<pubDate>Fri, 06 Nov 2026 06:28:32 +0000</pubDate>
+				<category><![CDATA[AI]]></category>
+		<category><![CDATA[Security]]></category>
+		<category><![CDATA[Lightspeed Venture Capital]]></category>
+		<category><![CDATA[Mergers and Acquisitions]]></category>
+		<category><![CDATA[palo alto networks]]></category>
+		<category><![CDATA[signalfire]]></category>
+		<guid isPermaLink="false">https://techcrunch.com/?p=3185713</guid>
+
+					<description><![CDATA[Clutch, backed by Lightspeed and SignalFire, was last valued at $85 million, according to a source.]]></description>
+		
+		
+		
+			</item>
+		<item>
+		<title>The New York Times reportedly in talks to buy Letterboxd for $330 million</title>
+		<link>https://techcrunch.com/2026/11/05/the-new-york-times-reportedly-in-talks-to-buy-letterboxd-for-330-million/</link>
+		
+		<dc:creator><![CDATA[Amanda Silberling]]></dc:creator>
+		<pubDate>Fri, 06 Nov 2026 00:07:18 +0000</pubDate>
+				<category><![CDATA[Media & Entertainment]]></category>
+		<category><![CDATA[In Brief]]></category>
+		<category><![CDATA[Letterboxd]]></category>
+		<category><![CDATA[Mergers and Acquisitions]]></category>
+		<category><![CDATA[The New York Times]]></category>
+		<guid isPermaLink="false">https://techcrunch.com/?p=3185685</guid>
+
+					<description><![CDATA[Letterboxd, an online platform for movie lovers, has grown dramatically in recent years.]]></description>
+		
+		
+		
+			</item>
+		<item>
+		<title>Meta, Google, and TikTok sue California AG over teen social media law</title>
+		<link>https://techcrunch.com/2026/11/05/meta-google-and-tiktok-sue-california-ag-over-teen-social-media-law/</link>
+		
+		<dc:creator><![CDATA[Amanda Silberling]]></dc:creator>
+		<pubDate>Fri, 06 Nov 2026 00:01:38 +0000</pubDate>
+				<category><![CDATA[Government & Policy]]></category>
+		<category><![CDATA[Social]]></category>
+		<category><![CDATA[Google]]></category>
+		<category><![CDATA[Meta]]></category>
+		<category><![CDATA[social media]]></category>
+		<category><![CDATA[TikTok]]></category>
+		<guid isPermaLink="false">https://techcrunch.com/?p=3185648</guid>
+
+					<description><![CDATA[If it goes into effect next year, this California law would restrict social media access for children under 16.]]></description>
+		
+		
+		
+			</item>
+		<item>
+		<title>Airbnb says it&#8217;s launching an AI travel agent in the first half of 2027</title>
+		<link>https://techcrunch.com/2026/11/05/airbnb-says-its-launching-an-ai-travel-agent-in-the-first-half-of-2027/</link>
+		
+		<dc:creator><![CDATA[Sarah Perez]]></dc:creator>
+		<pubDate>Thu, 05 Nov 2026 22:40:55 +0000</pubDate>
+				<category><![CDATA[AI]]></category>
+		<category><![CDATA[Commerce]]></category>
+		<category><![CDATA[AI agents]]></category>
+		<category><![CDATA[Airbnb]]></category>
+		<category><![CDATA[travel]]></category>
+		<guid isPermaLink="false">https://techcrunch.com/?p=3185656</guid>
+
+					<description><![CDATA[Airbnb says its upcoming AI agent will help travelers plan trips, compare options, manage bookings, and get assistance throughout their stay.]]></description>
+		
+		
+		
+			</item>
+	</channel>
+</rss>

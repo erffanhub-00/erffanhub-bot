@@ -1,0 +1,1 @@
+{"name":"erffanhub-ai","private":true,"scripts":{"check":"node --check src/index.js && node --check src/lib/validate.js && node --check src/lib/rss.js && node --check src/lib/ai.js && node --check src/lib/publish.js && node --check src/lib/youtube.js && node --check src/lib/time.js","test":"node --test \"test/*.test.js\""},"type":"module","version":"1.0.0"}

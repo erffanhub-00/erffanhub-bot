@@ -1,0 +1,16 @@
+name = "erffanhub-ai"
+main = "src/index.js"
+compatibility_date = "2026-11-07"
+
+[ai]
+binding = "AI"
+
+[[kv_namespaces]]
+binding = "SCHEDULED_KV"
+# Erfan must create the KV namespace and fill in its real id:
+#   wrangler kv namespace create SCHEDULED_KV
+# then replace PLACEHOLDER_KV_ID below with the id from that command.
+id = "PLACEHOLDER_KV_ID"
+
+[[triggers]]
+crons = ["*/15 * * * *"]

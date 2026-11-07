@@ -1,0 +1,8 @@
+{
+  // The $schema line is for editor help only; tgcloud reads the rest.
+  "$schema": "./node_modules/@tgcloud/cli/schema/tgcloud.json",
+  "static": {
+    "source": "miniapp/dist",
+    "spa": true
+  }
+}
