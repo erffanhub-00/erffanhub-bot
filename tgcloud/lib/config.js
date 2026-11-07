@@ -19,6 +19,10 @@ export const DB_GROUP_ID = -1003792206156;
 export const CHANNEL_URL = 'https://t.me/erffan_hub';
 export const GROUP_URL = 'https://t.me/erffanhub';
 
+
+export const RECEIPTS_GROUP_ID = -5022434107;
+export const CARD_NUMBER = '6219861922908727';
+
 // GitHub username whose public repos are shown on /projects.
 export const GITHUB_USER = 'erffanhub-00';
 
