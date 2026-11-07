@@ -6,6 +6,8 @@ import { WORKER_URL, SHARED_SECRET } from './config.js';
 
 // POST (or GET) JSON to the Worker with the shared-secret headers.
 // Returns the parsed JSON as-is, or { ok: false, error } on any failure.
+// A 401 with an unparsable body still reports 'unauthorized' so the real
+// cause (a SHARED_SECRET mismatch) is never hidden behind a generic error.
 export async function callWorker(path, body, method = 'POST') {
   try {
     const headers = {
@@ -16,7 +18,19 @@ export async function callWorker(path, body, method = 'POST') {
     const options = { method, headers };
     if (method !== 'GET') options.body = JSON.stringify(body ?? {});
     const res = await fetch(WORKER_URL + path, options);
-    return await res.json();
+    let data;
+    try {
+      data = await res.json();
+    } catch {
+      return {
+        ok: false,
+        error: res.status === 401 ? 'unauthorized' : 'worker_http_' + res.status,
+      };
+    }
+    if (!res.ok && (!data || data.ok !== false)) {
+      return { ok: false, error: 'worker_http_' + res.status };
+    }
+    return data;
   } catch {
     return { ok: false, error: 'worker_unreachable' };
   }

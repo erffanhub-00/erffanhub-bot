@@ -1,5 +1,5 @@
 {
-  "description": "ErffanHub v2 — Telegram channel content manager (RSS inbox, dashboard, YouTube, scheduling, publishing) on Telegram Serverless + Cloudflare Worker.",
+  "description": "ErffanHub v2 — Telegram channel content manager (RSS inbox, YouTube, scheduling, publishing) on Telegram Serverless + Cloudflare Worker. Bot-only, no dashboard.",
   "devDependencies": {
     "@tgcloud/cli": "^0.2.0"
   },
@@ -9,10 +9,9 @@
   "name": "erffanhub-bot",
   "private": true,
   "scripts": {
-    "build:miniapp": "node miniapp/build.js",
-    "check": "node --check tgcloud/schema.js && node --check tgcloud/lib/config.js && node --check tgcloud/lib/pure.js && node --check tgcloud/lib/auth.js && node --check tgcloud/lib/worker.js && node --check tgcloud/lib/keyboards.js && node --check tgcloud/handlers/message.js && node --check tgcloud/handlers/callback_query.js && node --check tgcloud/handlers/my_chat_member.js && node --check miniapp/build.js",
+    "check": "node --check tgcloud/schema.js && node --check tgcloud/lib/config.js && node --check tgcloud/lib/pure.js && node --check tgcloud/lib/errors.js && node --check tgcloud/lib/auth.js && node --check tgcloud/lib/worker.js && node --check tgcloud/lib/store.js && node --check tgcloud/lib/format.js && node --check tgcloud/lib/keyboards.js && node --check tgcloud/lib/views.js && node --check tgcloud/lib/inbox.js && node --check tgcloud/handlers/message.js && node --check tgcloud/handlers/callback_query.js && node --check tgcloud/handlers/my_chat_member.js",
     "test": "node --test \"test/*.test.js\" \"worker/test/*.test.js\""
   },
   "type": "module",
-  "version": "2.0.0"
+  "version": "2.1.0"
 }

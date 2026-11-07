@@ -14,12 +14,8 @@ export const WORKER_URL = 'https://erffanhub-ai.<subdomain>.workers.dev';
 // in his own checkout before deploying.
 export const SHARED_SECRET = 'CHANGE_ME';
 
-// Mini App URL, printed by `npx tgcloud push` after the first deploy
-// (https://app<app_id>.tgcloud.ai/). Fill in the real app id, then push again.
-export const APP_URL = 'https://app<app_id>.tgcloud.ai/';
-
 // Default RSS feeds, seeded into rss_feeds on first run if that table is
-// empty. Verified live 2026-11-07. Editable later from the dashboard.
+// empty. Verified live 2026-11-07. Editable later with /feeds and /addrss.
 export const DEFAULT_FEEDS = [
   { name: 'Zoomit', url: 'https://www.zoomit.ir/feed/' },
   { name: 'Digiato', url: 'https://digiato.com/feed' },

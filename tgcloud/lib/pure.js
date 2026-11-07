@@ -90,6 +90,28 @@ function isRealDate(year, month, day) {
   );
 }
 
+// Pagination over an in-memory list (1-based page numbers in the UI,
+// 0-based in code). Returns the slice for the page plus totals, with the
+// page clamped into range.
+export function paginate(items, page, perPage) {
+  const list = Array.isArray(items) ? items : [];
+  const size = Math.max(1, perPage | 0 || 1);
+  const totalPages = Math.max(1, Math.ceil(list.length / size));
+  const safePage = Math.min(Math.max(0, page | 0 || 0), totalPages - 1);
+  const start = safePage * size;
+  return {
+    pageItems: list.slice(start, start + size),
+    page: safePage,
+    totalPages,
+    total: list.length,
+  };
+}
+
+// Epoch ms before which a 'new' inbox item counts as stale (7 days).
+export function pruneBefore(nowMs) {
+  return nowMs - 7 * 24 * 60 * 60 * 1000;
+}
+
 // Parse "YYYY-MM-DD HH:mm" or "HH:mm" (today, Tehran time).
 // Returns epoch ms UTC, or null when the format or the date is invalid.
 export function parseTehranDateTime(text) {

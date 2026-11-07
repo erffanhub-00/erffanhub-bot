@@ -51,11 +51,3 @@ export const drafts = table('drafts', {
   publish_at: integer('publish_at'),
   created_at: integer('created_at').default(sql`(unixepoch())`),
 });
-
-export const publish_log = table('publish_log', {
-  id: integer('id').primaryKey({ autoIncrement: true }),
-  draft_id: integer('draft_id'),
-  channel_id: integer('channel_id'),
-  message_id: integer('message_id'),
-  published_at: integer('published_at'),
-});

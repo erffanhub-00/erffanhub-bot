@@ -1,4 +1,3 @@
-# miniapp/dist is INTENTIONALLY tracked (tgcloud push deploys it from local disk).
 .tgcloud/
 node_modules
 .dev.vars

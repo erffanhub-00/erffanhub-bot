@@ -1,234 +1,111 @@
+// Bot-only message handler (v6). One screen, edited in place: commands
+// send a single screen message; buttons edit it; nothing spams. All
+// inbox/draft logic lives in lib/inbox.js and lib/views.js — this file
+// only routes updates to screens.
+
 import { api, db } from 'sdk';
 import { eq } from 'sdk/db';
-import { settings, rss_feeds, news_items, drafts } from '../schema.js';
+import { rss_feeds, drafts } from '../schema.js';
 import { isOwner } from '../lib/auth.js';
-import { APP_URL, DEFAULT_FEEDS } from '../lib/config.js';
 import { callWorker } from '../lib/worker.js';
+import { workerErrorMessage } from '../lib/errors.js';
+import { isYouTubeUrl, extractYouTubeUrl, parseTehranDateTime } from '../lib/pure.js';
+import { draftPayload } from '../lib/format.js';
 import {
-  normalizeUrl,
-  isYouTubeUrl,
-  extractYouTubeUrl,
-  parseTehranDateTime,
-} from '../lib/pure.js';
-import { mainMenu, newsItemButtons, draftButtons } from '../lib/keyboards.js';
+  getSetting,
+  setSetting,
+  deleteSetting,
+  getChannel,
+} from '../lib/store.js';
+import {
+  fetchNews,
+  listNewItems,
+  listDrafts,
+  listScheduled,
+  listFeeds,
+  getDraft,
+  getCounts,
+} from '../lib/inbox.js';
+import {
+  HELP_TEXT,
+  mainMenuView,
+  helpView,
+  errorView,
+  inboxView,
+  draftView,
+  draftsView,
+  scheduledView,
+  feedsView,
+  promptEditView,
+  promptScheduleView,
+  clearAskView,
+  diagView,
+} from '../lib/views.js';
+import { draftKeyboard } from '../lib/keyboards.js';
 
-const DRAFT_STATUS_FA = {
-  draft: 'پیش‌نویس',
-  scheduled: 'زمان‌بندی‌شده',
-  published: 'منتشرشده',
-  discarded: 'حذف‌شده',
-};
-
-const HELP_TEXT =
-  'دستورها:\n' +
-  '/start — شروع و منوی اصلی\n' +
-  '/news — گرفتن خبرهای تازه از فیدها\n' +
-  '/drafts — دیدن پیش‌نویس‌ها\n' +
-  '/dashboard — باز کردن داشبورد\n' +
-  '/addrss <url> [name] — اضافه کردن فید RSS\n' +
-  '/help — همین راهنما\n\n' +
-  'برای ساخت پست از یوتیوب، فقط لینک ویدیو را بفرستید.';
-
-async function getSetting(key) {
-  const row = await db.select().from(settings).where(eq(settings.key, key)).get();
-  return row ? row.value : null;
-}
-
-async function setSetting(key, value) {
-  const existing = await getSetting(key);
-  if (existing === null) {
-    await db.insert(settings).values({ key, value }).run();
-  } else {
-    await db.update(settings).set({ value }).where(eq(settings.key, key)).run();
-  }
-}
-
-async function deleteSetting(key) {
-  await db.delete(settings).where(eq(settings.key, key)).run();
-}
-
-async function reply(chatId, text, replyMarkup) {
-  await api.sendMessage({
+async function sendScreen(chatId, view) {
+  const sent = await api.sendMessage({
     chat_id: chatId,
-    text,
-    ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+    text: view.text,
+    ...(view.reply_markup ? { reply_markup: view.reply_markup } : {}),
   });
+  return sent?.message_id ?? null;
 }
 
-function truncate(text, max) {
-  const s = String(text ?? '');
-  return s.length > max ? s.slice(0, max - 1) + '…' : s;
-}
-
-function formatTehran(ms) {
-  return new Intl.DateTimeFormat('fa-IR', {
-    timeZone: 'Asia/Tehran',
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  }).format(new Date(ms));
-}
-
-function formatDraft(draft) {
-  const lines = [];
-  if (draft.title) lines.push(draft.title);
-  if (draft.body) lines.push('', draft.body);
-  if (draft.source_url) {
-    lines.push('', (draft.kind === 'youtube' ? 'ویدیو: ' : 'منبع: ') + draft.source_url);
-  }
-  if (draft.status === 'scheduled' && draft.publish_at) {
-    lines.push('', 'زمان انتشار: ' + formatTehran(draft.publish_at));
-  }
-  const text = lines.join('\n').trim() || '(پیش‌نویس خالی)';
-  return truncate(text, 4000);
-}
-
-// Draft shape the Worker expects for /publish and /schedule.
-function draftPayload(draft) {
-  return {
-    id: draft.id,
-    title: draft.title,
-    body: draft.body,
-    media_url: draft.media_url || undefined,
-    source_url: draft.source_url || undefined,
-    button_text: draft.button_text || undefined,
-    button_url: draft.button_url || undefined,
-  };
-}
-
-function parsePublishedAt(value) {
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return value < 1000000000000 ? value * 1000 : value;
-  }
-  if (typeof value === 'string' && value) {
-    const ms = Date.parse(value);
-    return Number.isNaN(ms) ? null : ms;
-  }
-  return null;
-}
-
-async function seedFeedsIfEmpty() {
-  const existing = await db.select().from(rss_feeds).all();
-  if (existing.length > 0) return existing;
-  const now = Date.now();
-  for (const feed of DEFAULT_FEEDS) {
-    await db
-      .insert(rss_feeds)
-      .values({ url: feed.url, name: feed.name, active: 1, created_at: now })
-      .run();
-  }
-  return db.select().from(rss_feeds).all();
-}
-
-async function fetchNews(chatId) {
-  const feeds = await seedFeedsIfEmpty();
-  const active = feeds.filter((f) => f.active !== 0);
-  if (active.length === 0) {
-    await reply(chatId, 'هیچ فید فعالی نیست. با /addrss یک فید اضافه کنید.');
-    return;
-  }
-  const res = await callWorker('/news/fetch', {
-    feeds: active.map((f) => f.url),
-  });
-  if (!res || res.ok !== true || !Array.isArray(res.items)) {
-    await reply(chatId, 'گرفتن خبرها ممکن نشد. دوباره تلاش کنید.');
-    return;
-  }
-  const now = Date.now();
-  const inserted = [];
-  for (const item of res.items) {
-    if (!item || !item.link) continue;
-    const guid = item.guid || normalizeUrl(item.link);
-    const link = normalizeUrl(item.link);
-    const byGuid = await db
-      .select()
-      .from(news_items)
-      .where(eq(news_items.guid, guid))
-      .get();
-    if (byGuid) continue;
-    const byLink = await db
-      .select()
-      .from(news_items)
-      .where(eq(news_items.link, link))
-      .get();
-    if (byLink) continue;
-    const feed = active.find((f) => f.url === item.feed_url) || null;
-    const rows = await db
-      .insert(news_items)
-      .values({
-        feed_id: feed ? feed.id : null,
-        guid,
-        title: item.title || link,
-        link,
-        description: item.description || null,
-        published_at: parsePublishedAt(item.published_at),
-        fetched_at: now,
-        status: 'new',
-      })
-      .returning()
-      .run();
-    if (rows && rows[0]) inserted.push(rows[0]);
-  }
-  for (const feed of active) {
-    await db
-      .update(rss_feeds)
-      .set({ last_fetched_at: now, last_error: null })
-      .where(eq(rss_feeds.id, feed.id))
-      .run();
-  }
-  await reply(chatId, `${inserted.length} خبر تازه اضافه شد.`);
-  for (const item of inserted.slice(0, 10)) {
-    await reply(
-      chatId,
-      truncate(item.title, 500) + '\n' + item.link,
-      newsItemButtons(item.id),
-    );
-  }
-}
-
-async function listDrafts(chatId) {
-  const rows = await db.select().from(drafts).all();
-  rows.sort((a, b) => b.id - a.id);
-  const shown = rows.slice(0, 20);
-  if (shown.length === 0) {
-    await reply(chatId, 'هنوز پیش‌نویسی نیست.');
-    return;
-  }
-  const lines = shown.map((d) => {
-    const status = DRAFT_STATUS_FA[d.status] || d.status || 'پیش‌نویس';
-    const when =
-      d.status === 'scheduled' && d.publish_at
-        ? ' — ' + formatTehran(d.publish_at)
-        : '';
-    return `#${d.id} — ${truncate(d.title || '(بدون عنوان)', 60)} (${status}${when})`;
-  });
-  await reply(chatId, lines.join('\n'));
-  for (const d of shown.filter((x) => x.status === 'scheduled').slice(0, 5)) {
-    await reply(chatId, formatDraft(d), {
-      inline_keyboard: [
-        [
-          {
-            text: 'لغو زمان‌بندی',
-            callback_data: `draft_cancel_schedule:${d.id}`,
-          },
-        ],
-      ],
+// Edit the screen message; if the edit fails (message deleted), send the
+// screen as a new message instead. Used by command flows that first send
+// a placeholder message.
+async function replaceScreen(chatId, messageId, view) {
+  try {
+    await api.editMessageText({
+      chat_id: chatId,
+      message_id: messageId,
+      text: view.text,
+      ...(view.reply_markup ? { reply_markup: view.reply_markup } : {}),
     });
+    return messageId;
+  } catch {
+    return sendScreen(chatId, view);
   }
 }
+
+async function deleteMessageBestEffort(chatId, messageId) {
+  if (!messageId) return;
+  try {
+    await api.deleteMessage({ chat_id: chatId, message_id: messageId });
+  } catch {
+    // The user's own message cannot always be deleted; ignore.
+  }
+}
+
+function parseStoredMessage(value) {
+  if (!value) return null;
+  const [chatId, messageId] = String(value).split(':');
+  if (!chatId || !messageId) return null;
+  return { chatId: Number(chatId), messageId: Number(messageId) };
+}
+
+async function clearPending(ownerId) {
+  await deleteSetting(`editing_draft:${ownerId}`);
+  await deleteSetting(`editing_draft_msg:${ownerId}`);
+  await deleteSetting(`scheduling_draft:${ownerId}`);
+  await deleteSetting(`scheduling_draft_msg:${ownerId}`);
+}
+
+// --- YouTube: link -> draft -> the draft screen (one message). ---
 
 async function handleYouTube(chatId, text) {
   const url = extractYouTubeUrl(text);
   if (!url) {
-    await reply(chatId, 'لینک یوتیوب معتبر نیست.');
+    await sendScreen(chatId, errorView('لینک یوتیوب معتبر نیست.'));
     return;
   }
-  const res = await callWorker(
-    '/link/preview?url=' + encodeURIComponent(url),
-    null,
-    'GET',
-  );
+  const res = await callWorker('/link/preview?url=' + encodeURIComponent(url), null, 'GET');
   if (!res || res.ok !== true || res.kind !== 'youtube') {
-    await reply(chatId, 'گرفتن اطلاعات ویدیو ممکن نشد. دوباره تلاش کنید.');
+    await sendScreen(
+      chatId,
+      errorView(workerErrorMessage(res) || 'گرفتن اطلاعات ویدیو ممکن نشد. دوباره تلاش کنید.'),
+    );
     return;
   }
   const rows = await db
@@ -250,85 +127,87 @@ async function handleYouTube(chatId, text) {
     .run();
   const draft = rows && rows[0];
   if (!draft) {
-    await reply(chatId, 'ساخت پیش‌نویس ممکن نشد.');
+    await sendScreen(chatId, errorView('ساخت پیش‌نویس ممکن نشد.'));
     return;
   }
-  const preview =
-    (res.title || url) +
-    (res.author_name ? '\n' + res.author_name : '') +
-    '\n\nتوضیح را با دکمه ویرایش بنویسید.';
-  await reply(chatId, preview, draftButtons(draft.id));
+  await sendScreen(chatId, {
+    text:
+      `${res.title || url}` +
+      (res.author_name ? '\n' + res.author_name : '') +
+      '\n\nتوضیح را با دکمه ویرایش بنویسید.',
+    reply_markup: draftKeyboard(draft.id),
+  });
 }
 
-async function handlePendingEdit(chatId, ownerId, text) {
+// --- Pending text input: edit draft / set schedule time. The prompt and
+// the result both edit the draft screen message. ---
+
+async function handlePendingEdit(chatId, messageId, ownerId, text) {
   const draftId = await getSetting(`editing_draft:${ownerId}`);
   if (!draftId) return false;
-  const draft = await db
-    .select()
-    .from(drafts)
-    .where(eq(drafts.id, Number(draftId)))
-    .get();
+  const stored = parseStoredMessage(await getSetting(`editing_draft_msg:${ownerId}`));
+  const draft = await getDraft(draftId);
+  await clearPending(ownerId);
   if (!draft) {
-    await deleteSetting(`editing_draft:${ownerId}`);
-    await reply(chatId, 'پیش‌نویس پیدا نشد.');
+    if (stored) {
+      await replaceScreen(stored.chatId, stored.messageId, errorView('پیش‌نویس پیدا نشد.'));
+    } else {
+      await sendScreen(chatId, errorView('پیش‌نویس پیدا نشد.'));
+    }
     return true;
   }
-  await db
-    .update(drafts)
-    .set({ body: text })
-    .where(eq(drafts.id, draft.id))
-    .run();
-  await deleteSetting(`editing_draft:${ownerId}`);
-  const updated = await db
-    .select()
-    .from(drafts)
-    .where(eq(drafts.id, draft.id))
-    .get();
-  await reply(chatId, formatDraft(updated || { ...draft, body: text }), draftButtons(draft.id));
+  await db.update(drafts).set({ body: text }).where(eq(drafts.id, draft.id)).run();
+  const updated = (await getDraft(draft.id)) || { ...draft, body: text };
+  if (stored) {
+    await replaceScreen(stored.chatId, stored.messageId, draftView(updated));
+  } else {
+    await sendScreen(chatId, draftView(updated));
+  }
+  await deleteMessageBestEffort(chatId, messageId);
   return true;
 }
 
-async function handlePendingSchedule(chatId, ownerId, text) {
+async function handlePendingSchedule(chatId, messageId, ownerId, text) {
   const draftId = await getSetting(`scheduling_draft:${ownerId}`);
   if (!draftId) return false;
+  const stored = parseStoredMessage(await getSetting(`scheduling_draft_msg:${ownerId}`));
+  const show = async (view) => {
+    if (stored) {
+      await replaceScreen(stored.chatId, stored.messageId, view);
+    } else {
+      await sendScreen(chatId, view);
+    }
+  };
   const publishAt = parseTehranDateTime(text);
   if (publishAt === null) {
-    await reply(
-      chatId,
-      'زمان معتبر نیست. به این شکل بفرستید: 2026-11-08 18:00 یا فقط 18:00 برای امروز.',
-    );
+    const draft = await getDraft(draftId);
+    await show(promptScheduleView(draft || { id: draftId }, 'زمان معتبر نیست.'));
     return true;
   }
   if (publishAt <= Date.now()) {
-    await reply(chatId, 'زمان باید در آینده باشد. یک زمان دیگر بفرستید.');
+    const draft = await getDraft(draftId);
+    await show(promptScheduleView(draft || { id: draftId }, 'زمان باید در آینده باشد.'));
     return true;
   }
-  const draft = await db
-    .select()
-    .from(drafts)
-    .where(eq(drafts.id, Number(draftId)))
-    .get();
+  const draft = await getDraft(draftId);
   if (!draft) {
-    await deleteSetting(`scheduling_draft:${ownerId}`);
-    await reply(chatId, 'پیش‌نویس پیدا نشد.');
+    await clearPending(ownerId);
+    await show(errorView('پیش‌نویس پیدا نشد.'));
     return true;
   }
-  const channelId = await getSetting('channel_id');
-  if (!channelId) {
-    await deleteSetting(`scheduling_draft:${ownerId}`);
-    await reply(
-      chatId,
-      'کانال تنظیم نشده است. اول بات را در کانال ادمین کنید.',
-    );
+  const channel = await getChannel();
+  if (!channel) {
+    await clearPending(ownerId);
+    await show(errorView('کانال تنظیم نشده است. اول بات را در کانال ادمین کنید.'));
     return true;
   }
   const res = await callWorker('/schedule', {
     draft: draftPayload(draft),
-    channel_id: Number(channelId),
+    channel_id: Number(channel.id),
     publish_at: publishAt,
   });
   if (!res || res.ok !== true) {
-    await reply(chatId, 'زمان‌بندی ممکن نشد. دوباره تلاش کنید.');
+    await show(errorView(workerErrorMessage(res) || 'زمان‌بندی ممکن نشد. دوباره تلاش کنید.'));
     return true;
   }
   await db
@@ -336,98 +215,147 @@ async function handlePendingSchedule(chatId, ownerId, text) {
     .set({ status: 'scheduled', publish_at: publishAt })
     .where(eq(drafts.id, draft.id))
     .run();
-  await deleteSetting(`scheduling_draft:${ownerId}`);
-  await reply(chatId, 'زمان‌بندی شد برای ' + formatTehran(publishAt) + '.');
+  await clearPending(ownerId);
+  const updated = (await getDraft(draft.id)) || { ...draft, status: 'scheduled', publish_at: publishAt };
+  await show(draftView(updated));
+  await deleteMessageBestEffort(chatId, messageId);
   return true;
+}
+
+// --- /diag: one line per check, with the real error when one fails. ---
+
+async function handleDiag(chatId) {
+  const health = await callWorker('/health', {}, 'POST');
+  const workerOk = !!health && health.ok === true;
+  const secretOk = workerOk;
+  const workerError = workerOk ? null : workerErrorMessage(health);
+  const secretError = workerOk ? null : 'بررسی نشد — Worker در دسترس نیست.';
+  let aiOk = false;
+  let aiError = null;
+  if (workerOk) {
+    const ai = await callWorker('/ai', {
+      task: 'write_post',
+      title: 'تست تشخیص',
+      text: 'این یک متن تست کوتاه است.',
+    });
+    aiOk = !!ai && ai.ok === true && typeof ai.text === 'string' && ai.text.length > 0;
+    if (!aiOk) aiError = workerErrorMessage(ai);
+  } else {
+    aiError = 'Worker در دسترس نیست، تست AI انجام نشد.';
+  }
+  const kvOk = workerOk && health.kv === true;
+  const kvError = workerOk && health.kv !== true ? 'KV در Worker تنظیم نشده.' : null;
+  const channel = await getChannel();
+  const counts = await getCounts();
+  await sendScreen(
+    chatId,
+    diagView({ workerOk, workerError, secretOk, secretError, aiOk, aiError, kvOk, kvError, channel, counts }),
+  );
+}
+
+async function handleAddFeed(chatId, parts) {
+  const url = parts[1];
+  const name = parts.slice(2).join(' ') || null;
+  if (!url || !url.startsWith('https://')) {
+    await sendScreen(chatId, errorView('آدرس فید باید با https:// شروع شود.'));
+    return;
+  }
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    parsed = null;
+  }
+  if (!parsed || parsed.protocol !== 'https:') {
+    await sendScreen(chatId, errorView('آدرس فید معتبر نیست.'));
+    return;
+  }
+  const existing = await db.select().from(rss_feeds).where(eq(rss_feeds.url, url)).get();
+  if (existing) {
+    await sendScreen(chatId, errorView('این فید قبلاً اضافه شده است.'));
+    return;
+  }
+  await db
+    .insert(rss_feeds)
+    .values({ url, name, active: 1, created_at: Date.now() })
+    .run();
+  await sendScreen(chatId, feedsView(await listFeeds()));
 }
 
 export default async function (message, ctx) {
   const ownerId = message.from?.id;
   if (!isOwner(ownerId)) return;
   const chatId = message.chat.id;
+  const messageId = message.message_id;
   const text = (message.text || '').trim();
   try {
     if (!text) {
-      await reply(chatId, 'یک دستور یا لینک یوتیوب بفرستید. /help');
+      await sendScreen(chatId, errorView('یک دستور یا لینک یوتیوب بفرستید. /help'));
       return;
     }
     if (text.startsWith('/')) {
+      await clearPending(ownerId);
       const parts = text.split(/\s+/);
       const command = parts[0].split('@')[0];
       if (command === '/start') {
-        await reply(
-          chatId,
-          'سلام! من مدیر محتوای کانال هستم.\n\nخبرها را از فیدهای RSS می‌گیرم، با AI پست می‌نویسم و در کانال منتشر می‌کنم — الان یا سر ساعت.\n\nاز دکمه‌های زیر استفاده کنید یا /help را بفرستید.',
-          mainMenu(),
-        );
+        await sendScreen(chatId, mainMenuView(await getCounts()));
         return;
       }
       if (command === '/news') {
-        await fetchNews(chatId);
+        const placeholder = await sendScreen(chatId, { text: 'در حال گرفتن خبرها…' });
+        const result = await fetchNews();
+        if (result.error) {
+          await replaceScreen(chatId, placeholder, errorView(result.error));
+          return;
+        }
+        const items = await listNewItems();
+        await replaceScreen(chatId, placeholder, inboxView(items, 0));
         return;
       }
       if (command === '/drafts') {
-        await listDrafts(chatId);
+        await sendScreen(chatId, draftsView(await listDrafts(), 0));
         return;
       }
-      if (command === '/dashboard') {
-        await reply(chatId, 'داشبورد:', {
-          inline_keyboard: [
-            [{ text: 'باز کردن داشبورد', web_app: { url: APP_URL } }],
-          ],
-        });
+      if (command === '/scheduled') {
+        await sendScreen(chatId, scheduledView(await listScheduled(), 0));
         return;
       }
-      if (command === '/help') {
-        await reply(chatId, HELP_TEXT);
+      if (command === '/feeds') {
+        await sendScreen(chatId, feedsView(await listFeeds()));
+        return;
+      }
+      if (command === '/diag') {
+        await handleDiag(chatId);
+        return;
+      }
+      if (command === '/clear') {
+        const news = await listNewItems();
+        const all = await db.select().from(news_items).all();
+        const discarded = all.filter((n) => n.status === 'discarded').length;
+        await sendScreen(chatId, clearAskView(news.length + discarded));
         return;
       }
       if (command === '/addrss' || command === '/addfeed') {
-        const url = parts[1];
-        const name = parts.slice(2).join(' ') || null;
-        if (!url || !url.startsWith('https://')) {
-          await reply(chatId, 'آدرس فید باید با https:// شروع شود.');
-          return;
-        }
-        let parsed;
-        try {
-          parsed = new URL(url);
-        } catch {
-          parsed = null;
-        }
-        if (!parsed || parsed.protocol !== 'https:') {
-          await reply(chatId, 'آدرس فید معتبر نیست.');
-          return;
-        }
-        const existing = await db
-          .select()
-          .from(rss_feeds)
-          .where(eq(rss_feeds.url, url))
-          .get();
-        if (existing) {
-          await reply(chatId, 'این فید قبلاً اضافه شده است.');
-          return;
-        }
-        await db
-          .insert(rss_feeds)
-          .values({ url, name, active: 1, created_at: Date.now() })
-          .run();
-        await reply(chatId, 'فید اضافه شد: ' + (name || url));
+        await handleAddFeed(chatId, parts);
         return;
       }
-      await reply(chatId, 'این دستور را نمی‌شناسم. /help');
+      if (command === '/help') {
+        await sendScreen(chatId, { text: HELP_TEXT, reply_markup: undefined });
+        return;
+      }
+      await sendScreen(chatId, errorView('این دستور را نمی‌شناسم. /help'));
       return;
     }
-    if (await handlePendingEdit(chatId, ownerId, text)) return;
-    if (await handlePendingSchedule(chatId, ownerId, text)) return;
+    if (await handlePendingEdit(chatId, messageId, ownerId, text)) return;
+    if (await handlePendingSchedule(chatId, messageId, ownerId, text)) return;
     if (isYouTubeUrl(text)) {
       await handleYouTube(chatId, text);
       return;
     }
-    await reply(chatId, 'متوجه نشدم. /help را بفرستید تا دستورها را ببینید.');
-  } catch {
+    await sendScreen(chatId, errorView('متوجه نشدم. /help را بفرستید تا دستورها را ببینید.'));
+  } catch (err) {
     try {
-      await reply(chatId, 'خطایی رخ داد. دوباره تلاش کنید.');
+      await sendScreen(chatId, errorView('خطایی رخ داد: ' + (err?.message || 'نامشخص')));
     } catch {
       // The error reply itself failed; nothing more to do.
     }

@@ -6,6 +6,8 @@ manager. Plain JavaScript, no dependencies.
 ## What it does
 
 - `POST /news/fetch` — fetch RSS 2.0 / Atom feeds, return new items.
+- `POST /health` — same shared-secret auth; returns `{ ok: true, ai, kv }`
+  for the bot's /diag command.
 - `POST /ai` — write, rewrite, shorten or formalize a Persian channel post
   with Workers AI (Llama 3.1 8B), using only the facts in the given source.
 - `GET /link/preview?url=` — YouTube preview (title, author, thumbnail)
@@ -15,7 +17,7 @@ manager. Plain JavaScript, no dependencies.
   post in KV.
 - Cron every 15 minutes — publish due scheduled posts from KV.
 
-The Worker is the only publishing path. The bot and the dashboard ask
+The Worker is the only publishing path. The bot asks
 the Worker to publish; nothing else publishes.
 
 ## Auth

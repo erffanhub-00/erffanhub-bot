@@ -37,6 +37,10 @@ async function readJson(request) {
   }
 }
 
+async function handleHealth(request, env) {
+  return json({ ok: true, ai: !!env?.AI, kv: !!env?.SCHEDULED_KV });
+}
+
 async function handleAi(request, env) {
   const body = await readJson(request);
   if (!body || typeof body !== "object") return json({ ok: false, error: "invalid_json" }, 400);
@@ -241,6 +245,7 @@ export default {
       return json({ ok: false, error: "unauthorized" }, 401);
     }
     try {
+      if (request.method === "POST" && path === "/health") return handleHealth(request, env);
       if (request.method === "POST" && path === "/ai") return handleAi(request, env);
       if (request.method === "POST" && path === "/news/fetch") return handleNewsFetch(request, env);
       if (request.method === "GET" && path === "/link/preview") return handleLinkPreview(request);

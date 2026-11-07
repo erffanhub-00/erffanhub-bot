@@ -5,6 +5,8 @@ import {
   isYouTubeUrl,
   extractYouTubeUrl,
   parseTehranDateTime,
+  paginate,
+  pruneBefore,
 } from '../tgcloud/lib/pure.js';
 
 test('normalizeUrl strips tracking params, fragment and trailing slash', () => {
@@ -124,4 +126,28 @@ test('parseTehranDateTime rejects invalid input', () => {
   assert.equal(parseTehranDateTime('25:00'), null);
   assert.equal(parseTehranDateTime('10:60'), null);
   assert.equal(parseTehranDateTime('2026-11-07 18:00:00'), null);
+});
+
+test('paginate slices 5 per page and clamps out-of-range pages', () => {
+  const items = Array.from({ length: 12 }, (_, i) => i + 1);
+  const first = paginate(items, 0, 5);
+  assert.deepEqual(first.pageItems, [1, 2, 3, 4, 5]);
+  assert.equal(first.page, 0);
+  assert.equal(first.totalPages, 3);
+  assert.equal(first.total, 12);
+  const last = paginate(items, 2, 5);
+  assert.deepEqual(last.pageItems, [11, 12]);
+  assert.deepEqual(paginate(items, 9, 5).pageItems, [11, 12]);
+  assert.deepEqual(paginate(items, -3, 5).pageItems, [1, 2, 3, 4, 5]);
+  assert.deepEqual(paginate([], 0, 5), {
+    pageItems: [],
+    page: 0,
+    totalPages: 1,
+    total: 0,
+  });
+});
+
+test('pruneBefore is exactly 7 days before now', () => {
+  const now = Date.UTC(2026, 10, 7, 12, 0, 0);
+  assert.equal(pruneBefore(now), now - 7 * 24 * 60 * 60 * 1000);
 });
