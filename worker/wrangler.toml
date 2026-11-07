@@ -12,5 +12,5 @@ binding = "SCHEDULED_KV"
 # then replace PLACEHOLDER_KV_ID below with the id from that command.
 id = "PLACEHOLDER_KV_ID"
 
-[[triggers]]
+[triggers]
 crons = ["*/15 * * * *"]
