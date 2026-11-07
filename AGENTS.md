@@ -1,4 +1,4 @@
-# AGENTS.md — ErffanHub Files v2 (v2.3.1)
+# AGENTS.md — ErffanHub Files v2 (v2.3.2)
 
 ## Layout
 
@@ -165,7 +165,12 @@
   files, transactions, receipts, support, broadcast, database.
   Tables page at 20 rows (`ADMIN_PAGE_SIZE` in `lib/admin.js`) and
   search with the pure `searchUsers`/`searchFiles`/
-  `searchTransactions` helpers. Support messages are stored in the
+  `searchTransactions` helpers. The front-end reads paginated lists
+  as `d.pageItems` — that is the field name `paginate` returns, and
+  `test/dashboard.test.js` pins the agreement (v2.3.0 shipped with
+  the front-end reading `d.items`, which does not exist, so the
+  users/files/transactions/support tabs all crashed — fixed in
+  v2.3.2). Support messages are stored in the
   new `support_messages` table (kind + text/caption only — no media
   bytes, no file ids, so nothing token-exposing ever leaves the
   server); the bot also forwards each one to the owner in Telegram

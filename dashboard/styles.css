@@ -197,4 +197,7 @@ footer {
   table { font-size: 13px; }
   #content { overflow-x: auto; }
   .cards { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); }
+  /* Tabs scroll sideways instead of wrapping into three rows. */
+  #tabs { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 4px; }
+  #tabs button { flex-shrink: 0; }
 }

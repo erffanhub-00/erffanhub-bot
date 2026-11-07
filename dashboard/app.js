@@ -227,7 +227,7 @@ function renderUsers() {
   return call('adminUsers', { q: s.q, page: s.page }).then(function (d) {
     var html = searchHtml('users', 'جستجو: نام، یوزرنیم یا آیدی…');
     html += '<table><tr><th>کاربر</th><th>موجودی</th><th>دانلود</th><th>تلفن</th><th>آخرین فعالیت</th><th></th></tr>';
-    d.items.forEach(function (u) {
+    d.pageItems.forEach(function (u) {
       html += '<tr><td>' + esc(displayName(u)) + '<br><span class="muted">' + esc(u.user_id) + '</span></td>' +
         '<td>' + esc(fmtToman(u.balance)) + '</td>' +
         '<td>' + esc(u.downloads) + '</td>' +
@@ -294,7 +294,7 @@ function renderFiles() {
   return call('adminFiles', { q: s.q, page: s.page }).then(function (d) {
     var html = searchHtml('files', 'جستجو: عنوان، دسته یا نام فایل…');
     html += '<table><tr><th>آیدی</th><th>عنوان</th><th>دسته</th><th>قیمت</th><th>دانلود</th><th></th></tr>';
-    d.items.forEach(function (f) {
+    d.pageItems.forEach(function (f) {
       html += '<tr><td><b>' + esc(f.id) + '</b></td>' +
         '<td>' + esc(f.title || '—') + '</td>' +
         '<td>' + esc(f.category || '—') + '</td>' +
@@ -316,7 +316,7 @@ function showFile(fileId) {
     var html = '<button type="button" class="small" onclick="setTab(\'files\')">◀ بازگشت به فایل‌ها</button>';
     html += '<div class="panel"><h3>' + esc(f.id) + ' — ' + esc(f.title || '—') + '</h3>' +
       '<p>نسخه: ' + esc(f.version) + ' | پارت: ' + esc(f.parts_count) + ' | حجم: ' + esc(fmtBytes(f.size_total)) +
-      '<br>دانلود: ' + esc(f.downloads) + ' | ساخته شده: ' + esc(fmtDate(f.created_at)) + '</p></div>';
+      '<br>دانلود: ' + esc((d.downloads || []).length) + ' | ساخته شده: ' + esc(fmtDate(f.created_at)) + '</p></div>';
     html += '<div class="panel"><h3>✏️ ویرایش فایل</h3>' +
       '<div class="field"><label>عنوان</label><input type="text" id="f-title" value="' + esc(f.title || '') + '"></div>' +
       '<div class="field"><label>توضیح</label><textarea id="f-desc" rows="2">' + esc(f.description || '') + '</textarea></div>' +
@@ -368,7 +368,7 @@ function renderTx() {
   var s = tabState('tx');
   return call('adminTransactions', { q: s.q, page: s.page }).then(function (d) {
     var html = searchHtml('tx', 'جستجو: یوزرنیم، آیدی، نوع، وضعیت یا فایل…');
-    html += txTable(d.items);
+    html += txTable(d.pageItems);
     html += pagerHtml('tx', d.page, d.totalPages, d.total);
     content.innerHTML = html;
     bindSearch('tx', renderTx);
@@ -411,11 +411,11 @@ function renderSupport() {
   var s = tabState('support');
   return call('adminSupport', { page: s.page }).then(function (d) {
     var html = '';
-    if (!d.items.length) {
+    if (!d.pageItems.length) {
       html += '<p class="muted">پیام پشتیبانی‌ای نیست. ✅</p>';
     } else {
       html += '<table><tr><th>کاربر</th><th>نوع</th><th>متن</th><th>وضعیت</th><th>زمان</th><th></th></tr>';
-      d.items.forEach(function (m) {
+      d.pageItems.forEach(function (m) {
         html += '<tr><td>' + esc(m.username ? '@' + m.username : m.user_id) + '</td>' +
           '<td>' + esc(supportKindLabel(m.kind)) + '</td>' +
           '<td>' + esc((m.text || '—').slice(0, 120)) + '</td>' +

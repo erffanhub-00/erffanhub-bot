@@ -1,4 +1,4 @@
-# ErffanHub Files — v2.3.1
+# ErffanHub Files — v2.3.2
 
 A public Telegram bot on **Telegram Serverless** (no server, no
 Cloudflare Worker, no Mini App): a showcase + file library + wallet
