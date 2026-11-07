@@ -2,6 +2,8 @@
 // the model may use only the facts in the given title and text. Dates,
 // numbers, names and facts that are not in the source must not appear.
 
+import { CATEGORIES, parseClassifyText } from "./categories.js";
+
 export const AI_MODEL = "@cf/meta/llama-3.1-8b-instruct";
 
 export const SYSTEM_PROMPT = [
@@ -49,4 +51,39 @@ export async function writePost(env, input) {
   const text = extractAiText(result);
   if (!text) throw new Error("ai_empty_response");
   return text;
+}
+
+// Classify a batch of news items into topic categories with ONE AI call:
+// the titles go in as a numbered list and one category per item comes
+// back. Items the model cannot place fall back to 'سایر' (see
+// parseClassifyText) — classification never fails the fetch.
+export function buildClassifyMessages(items) {
+  const lines = items.map((item, i) => {
+    const title = String(item.title ?? "").slice(0, 150);
+    const text = String(item.text ?? "").slice(0, 200);
+    return `${i + 1}. ${title}${text ? " — " + text : ""}`;
+  });
+  return [
+    {
+      role: "system",
+      content: [
+        "تو یک دسته‌بندی‌کننده خبرهای تکنولوژی هستی.",
+        "به هر خبر دقیقاً یک دسته از این لیست بده و چیز دیگری ننویس:",
+        CATEGORIES.join("، "),
+        "برای هر خبر فقط یک خط بنویس به این شکل: شماره. دسته",
+      ].join("\n"),
+    },
+    { role: "user", content: lines.join("\n") },
+  ];
+}
+
+export async function classifyItems(env, items) {
+  if (!env?.AI?.run) throw new Error("ai_unavailable");
+  const result = await env.AI.run(AI_MODEL, {
+    messages: buildClassifyMessages(items),
+    max_tokens: 400,
+  });
+  const text = extractAiText(result);
+  if (!text) throw new Error("ai_empty_response");
+  return parseClassifyText(text, items);
 }

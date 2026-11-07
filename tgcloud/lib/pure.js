@@ -107,9 +107,36 @@ export function paginate(items, page, perPage) {
   };
 }
 
-// Epoch ms before which a 'new' inbox item counts as stale (7 days).
+// Epoch ms before which a 'new' inbox item counts as stale (3 days, v7:
+// the owner may change his mind within 3 days, then it is deleted).
 export function pruneBefore(nowMs) {
-  return nowMs - 7 * 24 * 60 * 60 * 1000;
+  return nowMs - 3 * 24 * 60 * 60 * 1000;
+}
+
+// Epoch ms before which a published draft counts as stale (30 days).
+export function prunePublishedBefore(nowMs) {
+  return nowMs - 30 * 24 * 60 * 60 * 1000;
+}
+
+// Validate an RSS feed URL for /addrss and the in-bot add-feed flow.
+// Returns { ok: true, url } or { ok: false, error } with a Persian error.
+export function validateFeedUrl(raw) {
+  const text = String(raw ?? '').trim();
+  const match = /https?:\/\/\S+/.exec(text);
+  const url = match ? match[0].replace(/[.,!?;]+$/, '') : '';
+  if (!url || !url.startsWith('https://')) {
+    return { ok: false, error: 'آدرس فید باید با https:// شروع شود.' };
+  }
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    parsed = null;
+  }
+  if (!parsed || parsed.protocol !== 'https:' || !parsed.hostname) {
+    return { ok: false, error: 'آدرس فید معتبر نیست.' };
+  }
+  return { ok: true, url };
 }
 
 // Parse "YYYY-MM-DD HH:mm" or "HH:mm" (today, Tehran time).

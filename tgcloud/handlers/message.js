@@ -1,4 +1,4 @@
-// Bot-only message handler (v6). One screen, edited in place: commands
+// Bot-only message handler (v7). One screen, edited in place: commands
 // send a single screen message; buttons edit it; nothing spams. All
 // inbox/draft logic lives in lib/inbox.js and lib/views.js — this file
 // only routes updates to screens.
@@ -9,7 +9,7 @@ import { rss_feeds, drafts } from '../schema.js';
 import { isOwner } from '../lib/auth.js';
 import { callWorker } from '../lib/worker.js';
 import { workerErrorMessage } from '../lib/errors.js';
-import { isYouTubeUrl, extractYouTubeUrl, parseTehranDateTime } from '../lib/pure.js';
+import { isYouTubeUrl, extractYouTubeUrl, parseTehranDateTime, validateFeedUrl } from '../lib/pure.js';
 import { draftPayload } from '../lib/format.js';
 import {
   getSetting,
@@ -19,6 +19,7 @@ import {
 } from '../lib/store.js';
 import {
   fetchNews,
+  inboxMenu,
   listNewItems,
   listDrafts,
   listScheduled,
@@ -31,13 +32,14 @@ import {
   mainMenuView,
   helpView,
   errorView,
-  inboxView,
   draftView,
   draftsView,
   scheduledView,
   feedsView,
   promptEditView,
   promptScheduleView,
+  promptFeedUrlView,
+  promptFeedNameView,
   clearAskView,
   diagView,
 } from '../lib/views.js';
@@ -90,6 +92,9 @@ async function clearPending(ownerId) {
   await deleteSetting(`editing_draft_msg:${ownerId}`);
   await deleteSetting(`scheduling_draft:${ownerId}`);
   await deleteSetting(`scheduling_draft_msg:${ownerId}`);
+  await deleteSetting(`adding_feed:${ownerId}`);
+  await deleteSetting(`adding_feed_msg:${ownerId}`);
+  await deleteSetting(`adding_feed_url:${ownerId}`);
 }
 
 // --- YouTube: link -> draft -> the draft screen (one message). ---
@@ -135,7 +140,7 @@ async function handleYouTube(chatId, text) {
       `${res.title || url}` +
       (res.author_name ? '\n' + res.author_name : '') +
       '\n\nتوضیح را با دکمه ویرایش بنویسید.',
-    reply_markup: draftKeyboard(draft.id),
+    reply_markup: draftKeyboard(draft),
   });
 }
 
@@ -222,6 +227,60 @@ async function handlePendingSchedule(chatId, messageId, ownerId, text) {
   return true;
 }
 
+// --- Pending text input: add-feed flow (URL step, then optional name).
+// Same pending-state pattern as edit/schedule: the prompt and the result
+// both edit the feeds screen message. ---
+
+async function handlePendingAddFeed(chatId, messageId, ownerId, text) {
+  const step = await getSetting(`adding_feed:${ownerId}`);
+  if (!step) return false;
+  const stored = parseStoredMessage(await getSetting(`adding_feed_msg:${ownerId}`));
+  const show = async (view) => {
+    if (stored) {
+      await replaceScreen(stored.chatId, stored.messageId, view);
+    } else {
+      await sendScreen(chatId, view);
+    }
+  };
+  if (step === 'url') {
+    const checked = validateFeedUrl(text);
+    if (!checked.ok) {
+      await show(promptFeedUrlView(checked.error + ' دوباره بفرستید.'));
+      return true;
+    }
+    const existing = await db.select().from(rss_feeds).where(eq(rss_feeds.url, checked.url)).get();
+    if (existing) {
+      await show(promptFeedUrlView('این فید قبلاً اضافه شده است. یک آدرس دیگر بفرستید.'));
+      return true;
+    }
+    await setSetting(`adding_feed:${ownerId}`, 'name');
+    await setSetting(`adding_feed_url:${ownerId}`, checked.url);
+    await show(promptFeedNameView(checked.url));
+    await deleteMessageBestEffort(chatId, messageId);
+    return true;
+  }
+  if (step === 'name') {
+    const url = await getSetting(`adding_feed_url:${ownerId}`);
+    const name = text === '-' || text === 'بدون نام' ? null : text;
+    await clearPending(ownerId);
+    if (!url) {
+      await show(feedsView(await listFeeds()));
+      return true;
+    }
+    const existing = await db.select().from(rss_feeds).where(eq(rss_feeds.url, url)).get();
+    if (!existing) {
+      await db
+        .insert(rss_feeds)
+        .values({ url, name, active: 1, created_at: Date.now() })
+        .run();
+    }
+    await show(feedsView(await listFeeds()));
+    await deleteMessageBestEffort(chatId, messageId);
+    return true;
+  }
+  return false;
+}
+
 // --- /diag: one line per check, with the real error when one fails. ---
 
 async function handleDiag(chatId) {
@@ -254,30 +313,20 @@ async function handleDiag(chatId) {
 }
 
 async function handleAddFeed(chatId, parts) {
-  const url = parts[1];
   const name = parts.slice(2).join(' ') || null;
-  if (!url || !url.startsWith('https://')) {
-    await sendScreen(chatId, errorView('آدرس فید باید با https:// شروع شود.'));
+  const checked = validateFeedUrl(parts[1] || '');
+  if (!checked.ok) {
+    await sendScreen(chatId, errorView(checked.error));
     return;
   }
-  let parsed;
-  try {
-    parsed = new URL(url);
-  } catch {
-    parsed = null;
-  }
-  if (!parsed || parsed.protocol !== 'https:') {
-    await sendScreen(chatId, errorView('آدرس فید معتبر نیست.'));
-    return;
-  }
-  const existing = await db.select().from(rss_feeds).where(eq(rss_feeds.url, url)).get();
+  const existing = await db.select().from(rss_feeds).where(eq(rss_feeds.url, checked.url)).get();
   if (existing) {
     await sendScreen(chatId, errorView('این فید قبلاً اضافه شده است.'));
     return;
   }
   await db
     .insert(rss_feeds)
-    .values({ url, name, active: 1, created_at: Date.now() })
+    .values({ url: checked.url, name, active: 1, created_at: Date.now() })
     .run();
   await sendScreen(chatId, feedsView(await listFeeds()));
 }
@@ -308,8 +357,7 @@ export default async function (message, ctx) {
           await replaceScreen(chatId, placeholder, errorView(result.error));
           return;
         }
-        const items = await listNewItems();
-        await replaceScreen(chatId, placeholder, inboxView(items, 0));
+        await replaceScreen(chatId, placeholder, await inboxMenu());
         return;
       }
       if (command === '/drafts') {
@@ -348,6 +396,7 @@ export default async function (message, ctx) {
     }
     if (await handlePendingEdit(chatId, messageId, ownerId, text)) return;
     if (await handlePendingSchedule(chatId, messageId, ownerId, text)) return;
+    if (await handlePendingAddFeed(chatId, messageId, ownerId, text)) return;
     if (isYouTubeUrl(text)) {
       await handleYouTube(chatId, text);
       return;

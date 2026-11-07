@@ -10,6 +10,9 @@ manager. Plain JavaScript, no dependencies.
   for the bot's /diag command.
 - `POST /ai` — write, rewrite, shorten or formalize a Persian channel post
   with Workers AI (Llama 3.1 8B), using only the facts in the given source.
+- `POST /ai/classify` — classify a batch of news items (max 30 per call)
+  into one topic category each, with one AI call. Any item the model
+  cannot place comes back as «سایر»; classification never fails a fetch.
 - `GET /link/preview?url=` — YouTube preview (title, author, thumbnail)
   via oEmbed.
 - `POST /publish` — publish a draft to the Telegram channel now.

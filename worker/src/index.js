@@ -5,7 +5,7 @@
 
 import { validateUrl } from "./lib/validate.js";
 import { parseRss, fetchFeed, dedupeItems } from "./lib/rss.js";
-import { writePost } from "./lib/ai.js";
+import { writePost, classifyItems } from "./lib/ai.js";
 import { publishDraft, notifyOwner } from "./lib/publish.js";
 import { normalizeYouTubeUrl, parseOembed } from "./lib/youtube.js";
 import { tehranNow, isDue } from "./lib/time.js";
@@ -57,6 +57,29 @@ async function handleAi(request, env) {
     return json({ ok: true, text });
   } catch (err) {
     console.log("AI error:", err?.message ?? err);
+    return json({ ok: false, error: err?.message ?? "ai_error" }, 502);
+  }
+}
+
+const CLASSIFY_MAX_ITEMS = 30;
+
+// Classify a batch of news items with one AI call. Never fails the
+// fetch: the bot treats any failure here as 'سایر' for every item.
+async function handleClassify(request, env) {
+  const body = await readJson(request);
+  if (!body || !Array.isArray(body.items) || body.items.length === 0) {
+    return json({ ok: false, error: "items_required" }, 400);
+  }
+  const items = body.items.slice(0, CLASSIFY_MAX_ITEMS).map((it) => ({
+    id: it?.id ?? null,
+    title: String(it?.title ?? ""),
+    text: String(it?.text ?? ""),
+  }));
+  try {
+    const categories = await classifyItems(env, items);
+    return json({ ok: true, categories });
+  } catch (err) {
+    console.log("Classify error:", err?.message ?? err);
     return json({ ok: false, error: err?.message ?? "ai_error" }, 502);
   }
 }
@@ -247,6 +270,7 @@ export default {
     try {
       if (request.method === "POST" && path === "/health") return handleHealth(request, env);
       if (request.method === "POST" && path === "/ai") return handleAi(request, env);
+      if (request.method === "POST" && path === "/ai/classify") return handleClassify(request, env);
       if (request.method === "POST" && path === "/news/fetch") return handleNewsFetch(request, env);
       if (request.method === "GET" && path === "/link/preview") return handleLinkPreview(request);
       if (request.method === "POST" && path === "/publish") return handlePublish(request, env);

@@ -1,6 +1,8 @@
-// Bot-only callback handler (v6). Every button edits the same screen
-// message in place — nothing new is sent, except the one confirmation
-// edit. All data comes from lib/inbox.js and lib/views.js.
+// Bot-only callback handler (v7). Every button edits the same screen
+// message in place — nothing new is sent. The inbox is a review queue:
+// pick a group (topic category or RSS feed), then review its items one by
+// one with exactly 3 buttons — confirm, previous, next. All data comes
+// from lib/inbox.js, lib/review.js and lib/views.js.
 
 import { api, db } from 'sdk';
 import { eq } from 'sdk/db';
@@ -9,13 +11,16 @@ import { isOwner } from '../lib/auth.js';
 import { callWorker } from '../lib/worker.js';
 import { workerErrorMessage } from '../lib/errors.js';
 import { draftPayload, channelMessageLink } from '../lib/format.js';
-import { setSetting, deleteSetting, getChannel } from '../lib/store.js';
+import { getSetting, setSetting, deleteSetting, getChannel } from '../lib/store.js';
+import { itemsForGroup, groupLabel, neighborIndex } from '../lib/review.js';
 import {
   fetchNews,
+  inboxMenu,
   listNewItems,
   listDrafts,
   listScheduled,
   listFeeds,
+  listYouTubeDrafts,
   getNewsItem,
   getDraft,
   getFeed,
@@ -25,15 +30,17 @@ import {
   mainMenuView,
   helpView,
   errorView,
-  inboxView,
-  itemView,
+  reviewView,
+  groupFinishedView,
   draftView,
   confirmPublishView,
   draftsView,
+  youtubeView,
   scheduledView,
   feedsView,
   promptEditView,
   promptScheduleView,
+  promptFeedUrlView,
 } from '../lib/views.js';
 
 // Edit the screen message. An edit that fails (e.g. identical text) is
@@ -67,8 +74,39 @@ async function feedNameFor(item) {
   return feed?.name || feed?.url || null;
 }
 
-// Build a draft from a news item with the AI writer.
-// Returns { draft } or { error } (Persian, with the real reason).
+// Show one review item: the group, its items and the item's index.
+// Falls back to the first item (or the finished screen) when the stored
+// item is gone.
+async function showReview(chatId, messageId, groupKey, itemId) {
+  const items = itemsForGroup(await listNewItems(), groupKey);
+  const feeds = await listFeeds();
+  const label = groupLabel(groupKey, feeds);
+  if (items.length === 0) {
+    await editScreen(chatId, messageId, groupFinishedView(label));
+    return;
+  }
+  let index = items.findIndex((it) => it.id === Number(itemId));
+  if (index === -1) index = 0;
+  const item = items[index];
+  await editScreen(
+    chatId,
+    messageId,
+    reviewView(item, groupKey, label, index, items.length, await feedNameFor(item)),
+  );
+}
+
+async function storeReview(ownerId, groupKey, itemId) {
+  await setSetting(`review_group:${ownerId}`, groupKey);
+  if (itemId) {
+    await setSetting(`review_item:${ownerId}`, String(itemId));
+  } else {
+    await deleteSetting(`review_item:${ownerId}`);
+  }
+}
+
+// Build a draft from a news item with the AI writer, then hard-delete the
+// news row — the draft keeps the title, source and link, so the inbox
+// stays clean. Returns { draft } or { error } (Persian, real reason).
 async function makeDraftFromNews(item) {
   const res = await callWorker('/ai', {
     task: 'write_post',
@@ -97,11 +135,7 @@ async function makeDraftFromNews(item) {
     .returning()
     .run();
   if (!rows || !rows[0]) return { error: 'ساخت پیش‌نویس ممکن نشد.' };
-  await db
-    .update(news_items)
-    .set({ status: 'selected' })
-    .where(eq(news_items.id, item.id))
-    .run();
+  await db.delete(news_items).where(eq(news_items.id, item.id)).run();
   return { draft: rows[0] };
 }
 
@@ -150,15 +184,38 @@ export default async function (query, ctx) {
     }
     return;
   }
+  const parts = String(query.data || '').split(':');
+  const action = parts[0] + ':' + (parts[1] || '');
+  const arg1 = parts[2];
+  const arg2 = parts[3];
+  const num = (v) => Number(v) || 0;
+
+  // Prev/next at the ends of a group: keep the button, answer with a
+  // short toast and do not change the message. This check runs before
+  // the generic answer below, because a query can only be answered once.
+  if ((action === 'rv:pv' || action === 'rv:nx') && chatId && messageId) {
+    const dir = action === 'rv:nx' ? 1 : -1;
+    const items = itemsForGroup(await listNewItems(), arg1);
+    if (neighborIndex(items, arg2, dir) === -1) {
+      const at = items.findIndex((it) => it.id === num(arg2));
+      if (at !== -1) {
+        try {
+          await api.answerCallbackQuery({
+            callback_query_id: queryId,
+            text: dir === 1 ? 'آخرین خبر است.' : 'اولین خبر است.',
+          });
+        } catch {
+          // Answering failed; nothing more to do.
+        }
+        return;
+      }
+    }
+  }
+
   let answered = false;
   try {
     await api.answerCallbackQuery({ callback_query_id: queryId });
     answered = true;
-    const parts = String(query.data || '').split(':');
-    const action = parts[0] + ':' + (parts[1] || '');
-    const arg1 = parts[2];
-    const arg2 = parts[3];
-    const num = (v) => Number(v) || 0;
 
     const show = (view) => editScreen(chatId, messageId, view);
     const showError = (message) => show(errorView(message));
@@ -169,7 +226,7 @@ export default async function (query, ctx) {
       return;
     }
     if (action === 'm:in') {
-      await show(inboxView(await listNewItems(), 0));
+      await show(await inboxMenu());
       return;
     }
     if (action === 'm:dr') {
@@ -184,65 +241,88 @@ export default async function (query, ctx) {
       await show(feedsView(await listFeeds()));
       return;
     }
+    if (action === 'm:yt') {
+      await show(youtubeView(await listYouTubeDrafts(), 0));
+      return;
+    }
     if (action === 'm:help') {
       await show(helpView());
       return;
     }
 
-    // --- Inbox ---
-    if (action === 'n:pg') {
-      await show(inboxView(await listNewItems(), num(arg1)));
+    // --- Review queue ---
+    if (action === 'rv:menu') {
+      await show(await inboxMenu());
       return;
     }
-    if (action === 'n:bk') {
-      await show(inboxView(await listNewItems(), num(arg1)));
-      return;
-    }
-    if (action === 'n:ft') {
+    if (action === 'rv:ft') {
       await show({ text: 'در حال گرفتن خبرها…' });
       const result = await fetchNews();
       if (result.error) {
         await show(errorView(result.error));
         return;
       }
-      await show(inboxView(await listNewItems(), 0));
+      await show(await inboxMenu());
       return;
     }
-    if (action === 'n:it') {
-      const item = await getNewsItem(arg1);
-      if (!item) {
-        await show(inboxView(await listNewItems(), num(arg2)));
+    if (action === 'rv:g') {
+      const items = itemsForGroup(await listNewItems(), arg1);
+      if (items.length === 0) {
+        await show(await inboxMenu());
         return;
       }
-      await show(itemView(item, await feedNameFor(item), num(arg2)));
+      await storeReview(ownerId, arg1, items[0].id);
+      await showReview(chatId, messageId, arg1, items[0].id);
       return;
     }
-    if (action === 'n:mk') {
-      const item = await getNewsItem(arg1);
-      if (!item) {
-        await show(inboxView(await listNewItems(), num(arg2)));
+    if (action === 'rv:nx' || action === 'rv:pv') {
+      const dir = action === 'rv:nx' ? 1 : -1;
+      const items = itemsForGroup(await listNewItems(), arg1);
+      const at = neighborIndex(items, arg2, dir);
+      if (at === -1) {
+        // The item is gone (pruned or confirmed elsewhere): reopen the
+        // group at its first item instead of failing.
+        await showReview(chatId, messageId, arg1, null);
         return;
       }
+      await storeReview(ownerId, arg1, items[at].id);
+      await showReview(chatId, messageId, arg1, items[at].id);
+      return;
+    }
+    if (action === 'rv:cf') {
+      const item = await getNewsItem(arg1);
+      if (!item) {
+        await showReview(chatId, messageId, arg1, null);
+        return;
+      }
+      // The next item in this group, computed before the confirm deletes
+      // the current row.
+      const groupItems = itemsForGroup(await listNewItems(), arg1);
+      const at = groupItems.findIndex((it) => it.id === item.id);
+      const next = at !== -1 ? groupItems[at + 1] || null : null;
       const made = await makeDraftFromNews(item);
       if (made.error) {
-        await show(errorWithBack(made.error, `n:bk:${num(arg2)}`));
+        await show(errorWithBack(made.error, 'rv:rs'));
         return;
       }
-      await show(draftView(made.draft));
+      await storeReview(ownerId, arg1, next ? next.id : null);
+      await show(draftView(made.draft, { resume: true }));
       return;
     }
-    if (action === 'n:dc') {
-      await db
-        .update(news_items)
-        .set({ status: 'discarded' })
-        .where(eq(news_items.id, num(arg1)))
-        .run();
-      await show(inboxView(await listNewItems(), num(arg2)));
+    if (action === 'rv:rs') {
+      const groupKey = await getSetting(`review_group:${ownerId}`);
+      const itemId = await getSetting(`review_item:${ownerId}`);
+      if (!groupKey) {
+        await show(await inboxMenu());
+        return;
+      }
+      await showReview(chatId, messageId, groupKey, itemId);
       return;
     }
-    if (action === 'n:del') {
-      await db.delete(news_items).where(eq(news_items.id, num(arg1))).run();
-      await show(inboxView(await listNewItems(), num(arg2)));
+
+    // --- YouTube list ---
+    if (action === 'yt:pg') {
+      await show(youtubeView(await listYouTubeDrafts(), num(arg1)));
       return;
     }
 
@@ -422,6 +502,36 @@ export default async function (query, ctx) {
     }
     if (action === 'f:del') {
       await db.delete(rss_feeds).where(eq(rss_feeds.id, num(arg1))).run();
+      await show(feedsView(await listFeeds()));
+      return;
+    }
+    if (action === 'f:add') {
+      await setSetting(`adding_feed:${ownerId}`, 'url');
+      await setSetting(`adding_feed_msg:${ownerId}`, `${chatId}:${messageId}`);
+      await show(promptFeedUrlView());
+      return;
+    }
+    if (action === 'f:ax') {
+      await deleteSetting(`adding_feed:${ownerId}`);
+      await deleteSetting(`adding_feed_msg:${ownerId}`);
+      await deleteSetting(`adding_feed_url:${ownerId}`);
+      await show(feedsView(await listFeeds()));
+      return;
+    }
+    if (action === 'f:nn') {
+      const url = await getSetting(`adding_feed_url:${ownerId}`);
+      await deleteSetting(`adding_feed:${ownerId}`);
+      await deleteSetting(`adding_feed_msg:${ownerId}`);
+      await deleteSetting(`adding_feed_url:${ownerId}`);
+      if (url) {
+        const existing = await db.select().from(rss_feeds).where(eq(rss_feeds.url, url)).get();
+        if (!existing) {
+          await db
+            .insert(rss_feeds)
+            .values({ url, name: null, active: 1, created_at: Date.now() })
+            .run();
+        }
+      }
       await show(feedsView(await listFeeds()));
       return;
     }

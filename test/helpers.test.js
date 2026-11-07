@@ -7,6 +7,8 @@ import {
   parseTehranDateTime,
   paginate,
   pruneBefore,
+  prunePublishedBefore,
+  validateFeedUrl,
 } from '../tgcloud/lib/pure.js';
 
 test('normalizeUrl strips tracking params, fragment and trailing slash', () => {
@@ -147,7 +149,31 @@ test('paginate slices 5 per page and clamps out-of-range pages', () => {
   });
 });
 
-test('pruneBefore is exactly 7 days before now', () => {
+test('pruneBefore is exactly 3 days before now', () => {
   const now = Date.UTC(2026, 10, 7, 12, 0, 0);
-  assert.equal(pruneBefore(now), now - 7 * 24 * 60 * 60 * 1000);
+  assert.equal(pruneBefore(now), now - 3 * 24 * 60 * 60 * 1000);
+});
+
+test('prunePublishedBefore is exactly 30 days before now', () => {
+  const now = Date.UTC(2026, 10, 7, 12, 0, 0);
+  assert.equal(prunePublishedBefore(now), now - 30 * 24 * 60 * 60 * 1000);
+});
+
+test('validateFeedUrl accepts https URLs and strips trailing punctuation', () => {
+  assert.deepEqual(validateFeedUrl('https://www.zoomit.ir/feed/'), {
+    ok: true,
+    url: 'https://www.zoomit.ir/feed/',
+  });
+  assert.deepEqual(validateFeedUrl('لینک: https://digiato.com/feed.'), {
+    ok: true,
+    url: 'https://digiato.com/feed',
+  });
+});
+
+test('validateFeedUrl rejects http, bare domains and junk', () => {
+  for (const bad of ['', 'zoomit.ir/feed', 'http://example.com/feed', 'https://', 'hello']) {
+    const res = validateFeedUrl(bad);
+    assert.equal(res.ok, false, bad);
+    assert.ok(typeof res.error === 'string' && res.error.length > 0, bad);
+  }
 });

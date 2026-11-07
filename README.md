@@ -1,20 +1,20 @@
 # ErffanHub v2
 
-A bot-only Telegram channel content manager. Fetch news from RSS feeds, turn a news item (or a YouTube link) into a post with AI help, edit it, schedule it, and publish it to the channel — everything happens inside the bot. There is no dashboard.
+A bot-only Telegram channel content manager. Fetch news from RSS feeds, review it one by one (grouped by AI topic category or by RSS feed), turn a news item (or a YouTube link) into a post with AI help, edit it, schedule it, and publish it to the channel — everything happens inside the bot. There is no dashboard.
 
 ## What it does
 
-1. **RSS inbox** — fetches news from the feeds you choose.
-2. **Bot screens** — pick a news item, write the post, edit it. One screen, edited in place; the bot never spams messages.
-3. **YouTube** — send a video link, get its thumbnail + title, edit the description, publish as a photo + caption with a glass "watch on YouTube" button.
+1. **RSS inbox** — fetches news from the feeds you choose. AI sorts every item into a topic category (موبایل، هوش مصنوعی، کامپیوتر و سخت‌افزار، نرم‌افزار و اپ، بازی، امنیت، اینترنت و شبکه، گجت و پوشیدنی، سایر).
+2. **Review queue** — pick a category or a feed, then read the news one by one: تایید to make a post, قبلی / بعدی to move through the group. Unconfirmed news stays 3 days, then is deleted.
+3. **YouTube** — send a video link, get its thumbnail + title, edit the description, publish as a photo + caption with a glass "watch on YouTube" button. YouTube drafts have their own section in the menu, separate from news.
 4. **Scheduling** — set a publish time (Tehran time) for a draft; it publishes on its own.
 5. **Publishing** — now, or on schedule, into the channel.
 
-AI only writes/edits the channel post. There is no free-form AI chat.
+AI only writes/edits the channel post. It does not write the news itself — news comes from RSS exactly as the source wrote it. There is no free-form AI chat.
 
 ## How the bot works
 
-One screen at a time. `/start` shows the main menu (news, drafts, scheduled, feeds, help). Every button edits that same message — nothing new is sent. The inbox shows 5 news items per page; tapping one opens it (write post, discard, delete, back). Drafts, scheduled posts and feeds work the same way. Old news (7 days) is pruned automatically, and `/clear` deletes all new and discarded news in one go.
+One screen at a time. `/start` shows the main menu (news, drafts, scheduled, feeds, YouTube, help). Every button edits that same message — nothing new is sent. The inbox shows groups first (categories, then feeds, each with its count, plus "all news"); tapping a group opens the review: one news item, exactly 3 buttons (✅ تایید | ◀ قبلی | بعدی ▶). Confirming writes the post with AI, deletes the news item, and turns the same message into the draft view (publish / edit / rewrite / shorter / schedule / delete), with a «برگشت به بررسی» button that resumes the group at the next item. Drafts, scheduled posts, feeds and YouTube videos work the same way. News you do not confirm stays 3 days and is then pruned automatically; `/clear` deletes all new news in one go. Published drafts older than 30 days are pruned on fetch.
 
 ## Architecture
 
@@ -22,10 +22,11 @@ Two pieces, one publishing path:
 
 ```
 Telegram Serverless                    Cloudflare Worker (erffanhub-ai)
-  bot + SQLite                           RSS fetch, AI writing, publishing
-    ├─ news inbox, drafts                 15-min Cron (scheduled posts only)
-    ├─ editing and management             KV: scheduled-post queue only
-    └─ scheduling (date + time)           publishing happens ONLY here
+  bot + SQLite                           RSS fetch, AI writing, AI
+    ├─ news review queue                  classification, publishing
+    ├─ drafts, YouTube, scheduling        15-min Cron (scheduled posts only)
+    └─ feeds                              KV: scheduled-post queue only
+                                           publishing happens ONLY here
 ```
 
 The bot never publishes directly. It asks the Worker to publish, so there is a single Publisher path. The bot and the Worker share one secret (`SHARED_SECRET`); it never appears in browser JS.
@@ -86,11 +87,14 @@ npx tgcloud push
 npx tgcloud migrate
 ```
 
-The migration drops the unused `publish_log` table (1 change — confirm the drop when `migrate` asks).
+The migration (from the live v5 database) makes 2 changes — confirm both when `migrate` asks:
+
+1. **DROP TABLE publish_log** (the unused table from v5).
+2. **ADD COLUMN category TEXT to news_items** (the AI topic category; old rows stay empty and read as «سایر»).
 
 ### 6. Open the bot
 
-Open the bot in Telegram and send `/start`.
+Open the bot in Telegram and send `/start`, then `/diag` — every check should be ✓.
 
 ## RSS feeds (default)
 
@@ -100,19 +104,19 @@ Open the bot in Telegram and send `/start`.
 | Digiato | https://digiato.com/feed |
 | TechCrunch | https://techcrunch.com/feed/ |
 
-Verified live 2026-11-07. Feeds can be added, toggled and removed with `/feeds` and `/addrss`.
+Verified live 2026-11-07. Feeds can be added, toggled and removed with `/feeds` (the «➕ افزودن فید» button asks for the URL, then an optional name) and `/addrss`.
 
 ## Bot commands
 
 | Command | What it does |
 |---|---|
 | `/start` | Main menu |
-| `/news` | Fetch fresh news and open the inbox |
-| `/drafts` | List drafts |
+| `/news` | Fetch fresh news and open the inbox (categories + feeds) |
+| `/drafts` | List drafts (news and YouTube, labelled) |
 | `/scheduled` | List scheduled posts |
-| `/feeds` | Manage RSS feeds |
+| `/feeds` | Manage RSS feeds, add a feed from inside the bot |
 | `/diag` | Check Worker, secret, AI, KV and channel |
-| `/clear` | Delete all new and discarded news |
+| `/clear` | Delete all new news |
 | `/addrss <url> [name]` | Add an RSS feed |
 | `/help` | Show help |
 
@@ -138,7 +142,7 @@ All free, no bank card needed.
 |---|---|
 | Telegram Serverless | Free start reported |
 | Cloudflare Workers (Free) | 0 — Cron every 15 min = 96 requests/day |
-| Cloudflare Workers AI (Free) | 0 — 10,000 neurons/day; one post ≈ 20 neurons |
+| Cloudflare Workers AI (Free) | 0 — 10,000 neurons/day; one post ≈ 20 neurons, one classify batch ≈ a few neurons |
 | Cloudflare KV (Free) | 0 — scheduled queue only |
 
 ## Security notes
@@ -152,7 +156,7 @@ All free, no bank card needed.
 
 ```sh
 npm test             # node --test "test/*.test.js" "worker/test/*.test.js"
-npm run check        # node --check on every source file
+npm run check        # node --check on every source file (bot + Worker)
 ```
 
 ## Me

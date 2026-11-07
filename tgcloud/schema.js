@@ -30,7 +30,9 @@ export const news_items = table('news_items', {
   description: text('description'),
   published_at: integer('published_at'),
   fetched_at: integer('fetched_at'),
-  // new | selected | discarded
+  // AI topic category (v7). Null = fetched before v7; read as 'سایر'.
+  category: text('category'),
+  // new | discarded (confirm hard-deletes the row in v7)
   status: text('status'),
 });
 
