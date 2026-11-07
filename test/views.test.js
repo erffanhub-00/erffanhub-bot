@@ -12,6 +12,9 @@ import {
   statsUserView,
   searchPromptView,
   promptTitleView,
+  walletView,
+  chargeView,
+  userSearchResultsView,
 } from '../tgcloud/lib/views.js';
 
 test('owner gate: isOwner refuses everyone while the owner id is unset (0)', () => {
@@ -197,4 +200,92 @@ test('user stats detail shows the phone only to the owner', () => {
 test('main menu view greets and shows the file count', () => {
   const view = mainMenuView(false, 3);
   assert.match(view.text, /فایل‌ها: 3 مورد/);
+});
+
+test('main menu shows the wallet balance and a wallet button', () => {
+  const view = mainMenuView(false, 3, 12000);
+  assert.match(view.text, /کیف پول: ۱۲٬۰۰۰ تومان/);
+  const buttons = view.reply_markup.inline_keyboard.flat();
+  assert.ok(buttons.some((b) => b.callback_data === 'w:home'));
+});
+
+test('file view shows the premium price and the price on the download button', () => {
+  const file = { id: 'F010', title: 'پرامپت ویژه', version: 1, kind: 'document', size_total: 100, parts_count: 1, price: 50000 };
+  const view = fileView(file, [{ file_name: 'prompt.txt' }], [{ version: 1 }], 0, 20000);
+  assert.match(view.text, /قیمت: ۵۰٬۰۰۰ تومان \(پرمیوم\)/);
+  const buttons = view.reply_markup.inline_keyboard.flat();
+  assert.ok(buttons.some((b) => b.callback_data === 'fl:dl:F010:1' && b.text.includes('۵۰٬۰۰۰')));
+  assert.ok(buttons.some((b) => b.callback_data === 'w:home'));
+  assert.ok(buttons.some((b) => b.text === '◀ بازگشت'));
+  assert.ok(buttons.some((b) => b.callback_data === 'm:home'));
+});
+
+test('file view of a free file says رایگان and has a plain download button', () => {
+  const file = { id: 'F011', title: 'رایگان', version: 1, kind: 'document', size_total: 100, parts_count: 1, price: 0 };
+  const view = fileView(file, [{ file_name: 'free.txt' }], [{ version: 1 }], 0);
+  assert.match(view.text, /قیمت: رایگان/);
+  const buttons = view.reply_markup.inline_keyboard.flat();
+  assert.ok(buttons.some((b) => b.callback_data === 'fl:dl:F011:1' && b.text === '⬇️ دریافت'));
+});
+
+test('file view in DB-group mode has no wallet/home buttons and back closes the screen', () => {
+  const file = { id: 'F012', title: 'X', version: 1, kind: 'document', size_total: 100, parts_count: 1, price: 50000 };
+  const view = fileView(file, [{ file_name: 'x.txt' }], [{ version: 1 }], 0, 0, { db: true });
+  const buttons = view.reply_markup.inline_keyboard.flat();
+  assert.ok(!buttons.some((b) => b.callback_data === 'w:home'));
+  assert.ok(!buttons.some((b) => b.callback_data === 'm:home'));
+  assert.ok(buttons.some((b) => b.callback_data === 'db:cls'));
+});
+
+test('wallet view shows the balance and the charge button', () => {
+  const view = walletView(75000, []);
+  assert.match(view.text, /💰 کیف پول: ۷۵٬۰۰۰ تومان/);
+  const buttons = view.reply_markup.inline_keyboard.flat();
+  assert.ok(buttons.some((b) => b.callback_data === 'w:charge'));
+  assert.ok(buttons.some((b) => b.callback_data === 'w:tx:0'));
+});
+
+test('charge view shows the card number and preset amounts', () => {
+  const view = chargeView('6037991122334455');
+  assert.match(view.text, /6037991122334455/);
+  const buttons = view.reply_markup.inline_keyboard.flat();
+  assert.ok(buttons.some((b) => b.callback_data === 'w:amt:50000'));
+  assert.ok(buttons.some((b) => b.callback_data === 'w:amtc'));
+  const empty = chargeView('');
+  assert.match(empty.text, /شماره کارت هنوز تنظیم نشده/);
+});
+
+test('stats view shows wallet totals and pending receipts', () => {
+  const view = statsView({
+    filesTotal: 4,
+    partsTotal: 6,
+    sizeTotal: 2048,
+    downloadsTotal: 9,
+    usersTotal: 12,
+    usersToday: 2,
+    usersWeek: 5,
+    totalCharged: 200000,
+    totalPurchased: 50000,
+    pendingReceipts: 2,
+  });
+  assert.match(view.text, /شارژها: ۲۰۰٬۰۰۰ تومان/);
+  assert.match(view.text, /خریدها: ۵۰٬۰۰۰ تومان/);
+  assert.match(view.text, /رسیدهای در انتظار: 2 مورد/);
+  const buttons = view.reply_markup.inline_keyboard.flat();
+  assert.ok(buttons.some((b) => b.callback_data === 'st:usearch'));
+  assert.ok(buttons.some((b) => b.callback_data === 'st:tx:0'));
+  assert.ok(buttons.some((b) => b.callback_data === 'st:notify'));
+});
+
+test('user search results list matches with paging and a back button', () => {
+  const users = [
+    { user_id: 123, username: 'ali', first_name: 'Ali', last_name: null },
+    { user_id: 456, username: null, first_name: 'Sara', last_name: null },
+  ];
+  const view = userSearchResultsView(users, 0, 'a');
+  assert.match(view.text, /جستجوی کاربر: «a» — 2 نتیجه/);
+  const buttons = view.reply_markup.inline_keyboard.flat();
+  assert.ok(buttons.some((b) => b.callback_data === 'st:u:123'));
+  assert.ok(buttons.some((b) => b.callback_data === 'st:u:456'));
+  assert.ok(buttons.some((b) => b.text === '◀ بازگشت'));
 });

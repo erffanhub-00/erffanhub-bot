@@ -1,41 +1,55 @@
-// Callback handler (v1). Every button edits the same screen message
-// in place — the only new messages are the delivered files. User
-// tracking runs on every interaction. Stats and DB-group actions are
-// owner-only; everything else re-checks force-join membership.
+// Callback handler (v2). Every button deletes the tapped screen
+// message and sends a fresh one at the bottom of the chat — the only
+// new messages are the delivered files (and broadcast/notify sends).
+// User tracking runs on every interaction. Stats, receipts and
+// DB-group actions are owner-only; everything else re-checks
+// force-join membership.
 
 import { api } from 'sdk';
 import { isOwner } from '../lib/auth.js';
-import { SOCIALS } from '../lib/config.js';
+import { SOCIALS, CARD_NUMBER } from '../lib/config.js';
 import {
   getSetting,
   setSetting,
   deleteSetting,
   trackUser,
+  takeNextFileId,
   listFiles,
   listCategories,
   getUser,
   getFile,
   deleteFile,
   getUserDownloads,
+  getUserBalance,
+  listUserTransactions,
+  listTransactions,
+  getTransactionByReceiptMessage,
+  finalizeIngest,
 } from '../lib/store.js';
-import { needsPhonePrompt, categoryOptions } from '../lib/pure.js';
+import { needsPhonePrompt, categoryOptions, isPremiumFile, canAfford } from '../lib/pure.js';
 import {
   checkMembership,
   membershipPassed,
   missingMembership,
   isDbGroup,
+  isReceiptsGroup,
   searchLibrary,
+  searchStatsUsers,
   getStatsData,
   getStatsUsers,
   getFileViewModel,
   countDownloads,
   deliverParts,
+  purchaseFile,
+  settleReceipt,
+  receiptApprovedText,
 } from '../lib/library.js';
 import { getProjects } from '../lib/github.js';
 import {
   mainMenuView,
   helpView,
   errorView,
+  dbErrorView,
   joinView,
   projectsView,
   socialsView,
@@ -44,34 +58,87 @@ import {
   categoryFilesView,
   fileView,
   searchPromptView,
+  walletView,
+  chargeView,
+  chargeAmountView,
+  chargeCustomAmountView,
+  premiumPayView,
+  myTxView,
   statsView,
   statsUsersView,
   statsUserView,
   statsFilesView,
   statsFileView,
+  ownerTxView,
+  userSearchPromptView,
+  userSearchResultsView,
+  notifyPromptView,
+  notifyConfirmView,
+  notifyUserPromptView,
   promptTitleView,
+  priceAmountPromptView,
+  titleSavedView,
 } from '../lib/views.js';
 
-async function editScreen(chatId, messageId, view) {
+const screenKey = (userId) => `screen:${userId}`;
+const screenDbKey = (ownerId) => `screen_db:${ownerId}`;
+
+async function deleteMessageBestEffort(chatId, messageId) {
+  if (!messageId) return;
   try {
-    await api.editMessageText({
-      chat_id: chatId,
-      message_id: messageId,
-      text: view.text,
-      ...(view.reply_markup ? { reply_markup: view.reply_markup } : {}),
-    });
+    await api.deleteMessage({ chat_id: chatId, message_id: messageId });
   } catch {
-    // Identical text or a deleted message: nothing to fix.
+    // Messages older than 48h cannot be deleted; ignore.
   }
 }
 
-async function sendScreen(chatId, view) {
+function parseStoredMessage(value) {
+  if (!value) return null;
+  const [chatId, messageId] = String(value).split(':');
+  if (!chatId || !messageId) return null;
+  return { chatId: Number(chatId), messageId: Number(messageId) };
+}
+
+async function deleteStoredScreen(key) {
+  const stored = parseStoredMessage(await getSetting(key));
+  if (!stored) return;
+  await deleteSetting(key);
+  await deleteMessageBestEffort(stored.chatId, stored.messageId);
+}
+
+// Show a screen: delete the previous screen for this key, then send
+// a fresh message at the bottom of the chat and remember it.
+async function showScreen(chatId, view, key) {
+  if (key) await deleteStoredScreen(key);
   const sent = await api.sendMessage({
     chat_id: chatId,
     text: view.text,
     ...(view.reply_markup ? { reply_markup: view.reply_markup } : {}),
   });
-  return sent?.message_id ?? null;
+  const id = sent?.message_id ?? null;
+  if (key && id) await setSetting(key, `${chatId}:${id}`);
+  return id;
+}
+
+async function editMessageCaptionBestEffort(chatId, messageId, caption) {
+  try {
+    await api.editMessageCaption({ chat_id: chatId, message_id: messageId, caption });
+  } catch {
+    // Cosmetic only.
+  }
+}
+
+async function removeInlineKeyboardBestEffort(chatId, messageId) {
+  try {
+    await api.editMessageReplyMarkup({
+      chat_id: chatId,
+      message_id: messageId,
+      reply_markup: { inline_keyboard: [] },
+    });
+  } catch {
+    // The receipt is already decided (idempotent); stale buttons
+    // answer with "already decided".
+  }
 }
 
 // (deliverParts lives in lib/library.js — shared with message.js,
@@ -101,20 +168,55 @@ export default async function (query, ctx) {
       answered = true;
     }
 
-    const show = (view) => editScreen(chatId, messageId, view);
+    const show = (view) => showScreen(chatId, view, screenKey(userId));
+    const showDb = (view) => showScreen(chatId, view, screenDbKey(userId));
     const showError = (message) => show(errorView(message));
 
-    // --- DB group: delete confirm + cancel pending input (owner only).
+    // --- Receipts group: approve / reject a top-up (owner only). ---
+    if (isReceiptsGroup(chatId)) {
+      if (!isOwner(userId)) return;
+      if (action === 'rx:ok' || action === 'rx:no') {
+        const mid = num(arg1);
+        const tx = await getTransactionByReceiptMessage(mid);
+        const res = await settleReceipt(tx, action === 'rx:ok');
+        if (res.status === 'missing') {
+          await api.answerCallbackQuery({ callback_query_id: queryId, text: 'رسیدی پیدا نشد.' });
+          return;
+        }
+        if (res.status === 'already') {
+          await api.answerCallbackQuery({ callback_query_id: queryId, text: 'قبلاً بررسی شده است.' });
+          return;
+        }
+        if (res.status === 'approved') {
+          await editMessageCaptionBestEffort(
+            chatId,
+            messageId,
+            receiptApprovedText(tx, await getUser(tx.user_id)),
+          );
+          await removeInlineKeyboardBestEffort(chatId, messageId);
+          await api.answerCallbackQuery({ callback_query_id: queryId, text: 'تایید شد.' });
+          return;
+        }
+        // Rejected receipts are deleted from the receipts group.
+        await deleteMessageBestEffort(chatId, messageId);
+        await api.answerCallbackQuery({ callback_query_id: queryId, text: 'رد شد.' });
+        return;
+      }
+      return;
+    }
+
+    // --- DB group: delete confirm + cancel pending input + price
+    // choice + file browsing (owner only). ---
     if (isDbGroup(chatId)) {
       if (!isOwner(userId)) return;
       if (action === 'db:dy') {
         const file = await getFile(arg1);
         if (file) await deleteFile(file.id);
-        await show({ text: file ? `فایل ${file.id} حذف شد.` : 'فایل پیدا نشد.' });
+        await showDb({ text: file ? `فایل ${file.id} حذف شد.` : 'فایل پیدا نشد.' });
         return;
       }
       if (action === 'db:dn') {
-        await show({ text: 'لغو شد.' });
+        await showDb({ text: 'لغو شد.' });
         return;
       }
       if (action === 'db:cx') {
@@ -122,14 +224,16 @@ export default async function (query, ctx) {
         await deleteSetting(`pending_bundle:${userId}`);
         await deleteSetting(`pending_update:${userId}`);
         await deleteSetting(`pending_catname:${userId}`);
-        await show({ text: 'لغو شد.' });
+        await deleteSetting(`pending_price:${userId}`);
+        await deleteSetting(`pending_price_amount:${userId}`);
+        await showDb({ text: 'لغو شد.' });
         return;
       }
       // Owner picks a category for the pending ingest.
       if (action === 'db:cat') {
         const raw = await getSetting(`pending_title:${userId}`);
         if (!raw) {
-          await show({ text: 'فایلی در انتظار نیست.' });
+          await showDb({ text: 'فایلی در انتظار نیست.' });
           return;
         }
         const names = categoryOptions(await listFiles());
@@ -138,18 +242,123 @@ export default async function (query, ctx) {
         const state = JSON.parse(raw);
         state.category = name;
         await setSetting(`pending_title:${userId}`, JSON.stringify(state));
-        await show(promptTitleView(names, name, state.mode === 'bundle'));
+        await showDb(promptTitleView(names, name, state.mode === 'bundle'));
         return;
       }
       // Owner wants a brand-new category: ask for its name as text.
       if (action === 'db:catnew') {
         const raw = await getSetting(`pending_title:${userId}`);
         if (!raw) {
-          await show({ text: 'فایلی در انتظار نیست.' });
+          await showDb({ text: 'فایلی در انتظار نیست.' });
           return;
         }
         await setSetting(`pending_catname:${userId}`, raw);
-        await show({ text: 'نام دسته جدید را بفرستید (یا «لغو» برای برگشت).' });
+        await showDb({ text: 'نام دسته جدید را بفرستید (یا «لغو» برای برگشت).' });
+        return;
+      }
+      // Owner picks free for the pending ingest.
+      if (action === 'db:free') {
+        const raw = await getSetting(`pending_price:${userId}`);
+        if (!raw) {
+          await showDb(dbErrorView('فایلی در انتظار قیمت نیست.'));
+          return;
+        }
+        const state = JSON.parse(raw);
+        await deleteSetting(`pending_price:${userId}`);
+        const id = await takeNextFileId();
+        const done = await finalizeIngest(state, id, state.title, state.description, 0);
+        if (done) {
+          await showDb(titleSavedView(done));
+        } else {
+          await showDb(dbErrorView('ثبت فایل ممکن نشد.'));
+        }
+        return;
+      }
+      // Owner picks premium: ask for the price as text.
+      if (action === 'db:prem') {
+        const raw = await getSetting(`pending_price:${userId}`);
+        if (!raw) {
+          await showDb(dbErrorView('فایلی در انتظار قیمت نیست.'));
+          return;
+        }
+        await setSetting(`pending_price_amount:${userId}`, raw);
+        await deleteSetting(`pending_price:${userId}`);
+        await showDb(priceAmountPromptView());
+        return;
+      }
+      // Close a DB-group screen.
+      if (action === 'db:cls' || action === 'm:home') {
+        await deleteMessageBestEffort(chatId, messageId);
+        await deleteSetting(screenDbKey(userId));
+        return;
+      }
+      // File browsing inside the DB group (same lists as users see).
+      if (action === 'm:files') {
+        const all = await listFiles();
+        await showDb(categoriesView(await listCategories(), all.length));
+        return;
+      }
+      if (action === 'fl:cat') {
+        const cats = await listCategories();
+        const cat = cats[num(arg1)];
+        if (!cat) {
+          const all = await listFiles();
+          await showDb(categoriesView(cats, all.length));
+          return;
+        }
+        const items = (await listFiles()).filter((f) => (f.category || 'سایر') === cat.name);
+        await showDb(categoryFilesView(items, 0, num(arg1), cat.name));
+        return;
+      }
+      if (action === 'fc:pg') {
+        const cats = await listCategories();
+        const cat = cats[num(arg1)];
+        if (!cat) {
+          const all = await listFiles();
+          await showDb(categoriesView(cats, all.length));
+          return;
+        }
+        const items = (await listFiles()).filter((f) => (f.category || 'سایر') === cat.name);
+        await showDb(categoryFilesView(items, num(arg2), num(arg1), cat.name));
+        return;
+      }
+      if (action === 'fl:all') {
+        await showDb(filesView(await listFiles(), 0, null, 'db:cls', true));
+        return;
+      }
+      if (action === 'fl:pg') {
+        await showDb(filesView(await listFiles(), num(arg1), null, 'db:cls', true));
+        return;
+      }
+      if (action === 'fl:vw' || action === 'fl:ver') {
+        const model = await getFileViewModel(arg1, action === 'fl:ver' ? num(arg2) : null);
+        if (!model) {
+          const all = await listFiles();
+          await showDb(categoriesView(await listCategories(), all.length));
+          return;
+        }
+        const count = await countDownloads(arg1, model.view.version);
+        await showDb(fileView(model.view, model.parts, model.versions, count, 0, { db: true }));
+        return;
+      }
+      if (action === 'fl:dl') {
+        // Owner preview in the DB group: free, no phone prompt.
+        const model = await getFileViewModel(arg1, num(arg2));
+        if (!model) {
+          await api.answerCallbackQuery({ callback_query_id: queryId });
+          answered = true;
+          await showDb(dbErrorView('فایل پیدا نشد.'));
+          return;
+        }
+        const done = await deliverParts(chatId, model.view, model.view.version, model.parts, from, false);
+        if (done.error) {
+          await api.answerCallbackQuery({ callback_query_id: queryId });
+          answered = true;
+          await showDb(dbErrorView(done.error));
+          return;
+        }
+        await api.answerCallbackQuery({ callback_query_id: queryId, text: 'فرستاده شد.' });
+        answered = true;
         return;
       }
       return;
@@ -163,7 +372,7 @@ export default async function (query, ctx) {
       action === 'db:dn' ||
       action === 'db:cx'
     );
-    if (needsGate && chatId && !isDbGroup(chatId)) {
+    if (needsGate && chatId && !isDbGroup(chatId) && !isReceiptsGroup(chatId)) {
       const check = await checkMembership(userId);
       if (!membershipPassed(check)) {
         await trackUser(from, false);
@@ -176,7 +385,7 @@ export default async function (query, ctx) {
     // --- Main menu ---
     if (action === 'm:home') {
       const all = await listFiles();
-      await show(mainMenuView(isOwner(userId), all.length));
+      await show(mainMenuView(isOwner(userId), all.length, await getUserBalance(userId)));
       return;
     }
     if (action === 'm:check') {
@@ -189,7 +398,7 @@ export default async function (query, ctx) {
         });
         answered = true;
         const all = await listFiles();
-        await show(mainMenuView(isOwner(userId), all.length));
+        await show(mainMenuView(isOwner(userId), all.length, await getUserBalance(userId)));
       } else {
         await trackUser(from, false);
         await api.answerCallbackQuery({
@@ -223,7 +432,7 @@ export default async function (query, ctx) {
       return;
     }
     if (action === 'm:search') {
-      await setSetting(`pending_search:${userId}`, `${chatId}:${messageId}`);
+      await setSetting(`pending_search:${userId}`, '1');
       await show(searchPromptView());
       return;
     }
@@ -235,7 +444,42 @@ export default async function (query, ctx) {
       await deleteSetting(`pending_search:${userId}`);
       await deleteSetting(`search_query:${userId}`);
       const all = await listFiles();
-      await show(mainMenuView(isOwner(userId), all.length));
+      await show(mainMenuView(isOwner(userId), all.length, await getUserBalance(userId)));
+      return;
+    }
+
+    // --- Wallet ---
+    if (action === 'w:home') {
+      await show(walletView(await getUserBalance(userId), await listUserTransactions(userId)));
+      return;
+    }
+    if (action === 'w:charge') {
+      await show(chargeView(CARD_NUMBER));
+      return;
+    }
+    if (action === 'w:amt') {
+      const amount = num(arg1);
+      if (amount <= 0) {
+        await showError('مبلغ درست نیست.');
+        return;
+      }
+      await setSetting(`pending_charge_receipt:${userId}`, JSON.stringify({ amount }));
+      await show(chargeAmountView(amount));
+      return;
+    }
+    if (action === 'w:amtc') {
+      await setSetting(`pending_charge_amount:${userId}`, '1');
+      await show(chargeCustomAmountView());
+      return;
+    }
+    if (action === 'w:tx') {
+      await show(myTxView(await listUserTransactions(userId), num(arg1)));
+      return;
+    }
+    if (action === 'w:cx') {
+      await deleteSetting(`pending_charge_receipt:${userId}`);
+      await deleteSetting(`pending_charge_amount:${userId}`);
+      await show(walletView(await getUserBalance(userId), await listUserTransactions(userId)));
       return;
     }
 
@@ -295,6 +539,97 @@ export default async function (query, ctx) {
       await show(statsFileView(model.view, model.parts, model.versions, count));
       return;
     }
+    if (action === 'st:usearch') {
+      if (!isOwner(userId)) {
+        await showError('این بخش فقط برای صاحب بات است.');
+        return;
+      }
+      await setSetting(`pending_usersearch:${userId}`, '1');
+      await show(userSearchPromptView());
+      return;
+    }
+    if (action === 'st:usx') {
+      await deleteSetting(`pending_usersearch:${userId}`);
+      await deleteSetting(`user_search_query:${userId}`);
+      await show(statsView(await getStatsData()));
+      return;
+    }
+    if (action === 'st:ures') {
+      if (!isOwner(userId)) {
+        await showError('این بخش فقط برای صاحب بات است.');
+        return;
+      }
+      const q = (await getSetting(`user_search_query:${userId}`)) || '';
+      const results = q ? await searchStatsUsers(q) : [];
+      await show(userSearchResultsView(results, num(arg1), q));
+      return;
+    }
+    if (action === 'st:tx') {
+      if (!isOwner(userId)) {
+        await showError('این بخش فقط برای صاحب بات است.');
+        return;
+      }
+      await show(ownerTxView(await listTransactions(), num(arg1)));
+      return;
+    }
+    if (action === 'st:msg') {
+      if (!isOwner(userId)) {
+        await showError('این بخش فقط برای صاحب بات است.');
+        return;
+      }
+      const target = await getUser(arg1);
+      if (!target) {
+        await showError('کاربر پیدا نشد.');
+        return;
+      }
+      await setSetting(`pending_notify_user:${userId}`, JSON.stringify({ userId: target.user_id }));
+      await show(notifyUserPromptView(target));
+      return;
+    }
+    if (action === 'st:notify') {
+      if (!isOwner(userId)) {
+        await showError('این بخش فقط برای صاحب بات است.');
+        return;
+      }
+      await setSetting(`pending_broadcast:${userId}`, '1');
+      await show(notifyPromptView());
+      return;
+    }
+    if (action === 'st:nfx') {
+      await deleteSetting(`pending_broadcast:${userId}`);
+      await deleteSetting(`pending_broadcast_text:${userId}`);
+      await show(statsView(await getStatsData()));
+      return;
+    }
+    if (action === 'st:nfy') {
+      if (!isOwner(userId)) {
+        await showError('این بخش فقط برای صاحب بات است.');
+        return;
+      }
+      const text = (await getSetting(`pending_broadcast_text:${userId}`)) || '';
+      await deleteSetting(`pending_broadcast:${userId}`);
+      await deleteSetting(`pending_broadcast_text:${userId}`);
+      if (arg1 !== 'yes' || !text) {
+        await show(statsView(await getStatsData()));
+        return;
+      }
+      const allUsers = await listUsers();
+      let ok = 0;
+      let fail = 0;
+      for (const u of allUsers) {
+        try {
+          await api.sendMessage({ chat_id: u.user_id, text });
+          ok += 1;
+        } catch {
+          fail += 1;
+        }
+      }
+      await show({
+        text: `اطلاع‌رسانی ارسال شد.\nبه ${ok} کاربر رسید، ${fail} کاربر نشد.`,
+        reply_markup: undefined,
+      });
+      return;
+    }
 
     // --- Files: categories / browse / search pages / view / version / download ---
     if (action === 'fl:cat') {
@@ -343,7 +678,7 @@ export default async function (query, ctx) {
         return;
       }
       const count = await countDownloads(arg1, model.view.version);
-      await show(fileView(model.view, model.parts, model.versions, count));
+      await show(fileView(model.view, model.parts, model.versions, count, await getUserBalance(userId)));
       return;
     }
     if (action === 'fl:ver') {
@@ -354,7 +689,7 @@ export default async function (query, ctx) {
         return;
       }
       const count = await countDownloads(arg1, model.view.version);
-      await show(fileView(model.view, model.parts, model.versions, count));
+      await show(fileView(model.view, model.parts, model.versions, count, await getUserBalance(userId)));
       return;
     }
     if (action === 'fl:dl') {
@@ -364,6 +699,20 @@ export default async function (query, ctx) {
         answered = true;
         await showError('فایل پیدا نشد.');
         return;
+      }
+      // Premium: the wallet must cover the price before anything else.
+      if (isPremiumFile(model.view)) {
+        const balance = await getUserBalance(userId);
+        if (!canAfford(balance, Number(model.view.price) || 0)) {
+          await setSetting(
+            `pending_purchase:${userId}`,
+            JSON.stringify({ fileId: arg1, version: model.view.version }),
+          );
+          await api.answerCallbackQuery({ callback_query_id: queryId });
+          answered = true;
+          await show(premiumPayView(model.view, balance));
+          return;
+        }
       }
       // Optional phone, once: if the user has never shared a phone,
       // offer the native share-contact button + a skip button. The
@@ -392,6 +741,20 @@ export default async function (query, ctx) {
         answered = true;
         return;
       }
+      // Pay now (free files skip this), then deliver.
+      if (isPremiumFile(model.view)) {
+        const bought = await purchaseFile(from, model.view, model.view.version);
+        if (bought.error) {
+          await setSetting(
+            `pending_purchase:${userId}`,
+            JSON.stringify({ fileId: arg1, version: model.view.version }),
+          );
+          await api.answerCallbackQuery({ callback_query_id: queryId });
+          answered = true;
+          await show(premiumPayView(model.view, bought.balance));
+          return;
+        }
+      }
       const done = await deliverParts(chatId, model.view, model.view.version, model.parts, from, false);
       if (done.error) {
         await api.answerCallbackQuery({ callback_query_id: queryId });
@@ -413,8 +776,12 @@ export default async function (query, ctx) {
           callback_query_id: queryId,
           text: 'خطایی رخ داد.',
         });
-      } else if (chatId && messageId) {
-        await editScreen(chatId, messageId, errorView('خطایی رخ داد: ' + (err?.message || 'نامشخص')));
+      } else if (chatId && messageId && !isReceiptsGroup(chatId)) {
+        const key = isDbGroup(chatId) ? screenDbKey(userId) : screenKey(userId);
+        const view = isDbGroup(chatId)
+          ? dbErrorView('خطایی رخ داد: ' + (err?.message || 'نامشخص'))
+          : errorView('خطایی رخ داد: ' + (err?.message || 'نامشخص'));
+        await showScreen(chatId, view, key);
       }
     } catch {
       // The fallback itself failed; nothing more to do.

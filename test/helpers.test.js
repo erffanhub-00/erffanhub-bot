@@ -3,6 +3,11 @@ import assert from 'node:assert/strict';
 import {
   paginate,
   formatBytes,
+  formatToman,
+  parseAmount,
+  isPremiumFile,
+  canAfford,
+  searchUsers,
   nextFileId,
   normalizeDigits,
   parseFileId,
@@ -18,6 +23,60 @@ import {
   countNewUsers,
   parseGitHubRepos,
 } from '../tgcloud/lib/pure.js';
+
+test('formatToman renders Persian thousands with the تومان suffix', () => {
+  assert.equal(formatToman(12000), '۱۲٬۰۰۰ تومان');
+  assert.equal(formatToman(50000), '۵۰٬۰۰۰ تومان');
+  assert.equal(formatToman(0), '۰ تومان');
+  assert.equal(formatToman(null), '۰ تومان');
+});
+
+test('parseAmount tolerates Persian digits, commas and the تومان suffix', () => {
+  assert.equal(parseAmount('۵۰٬۰۰۰ تومان'), 50000);
+  assert.equal(parseAmount('50,000'), 50000);
+  assert.equal(parseAmount('100000'), 100000);
+  assert.equal(parseAmount('  ۲۵ ۰۰۰  '), 25000);
+  assert.equal(parseAmount('abc'), null);
+  assert.equal(parseAmount(''), null);
+  assert.equal(parseAmount('0'), null);
+  assert.equal(parseAmount('0', true), 0);
+  assert.equal(parseAmount('0 تومان', true), 0);
+  assert.equal(parseAmount('1500000000'), null);
+});
+
+test('isPremiumFile is true only above a zero price; canAfford covers equality', () => {
+  assert.equal(isPremiumFile({ price: 50000 }), true);
+  assert.equal(isPremiumFile({ price: 0 }), false);
+  assert.equal(isPremiumFile({}), false);
+  assert.equal(isPremiumFile(null), false);
+  assert.equal(canAfford(10000, 5000), true);
+  assert.equal(canAfford(5000, 5000), true);
+  assert.equal(canAfford(4000, 5000), false);
+  assert.equal(canAfford(null, 0), true);
+});
+
+test('searchUsers matches username, name and id, case-insensitive', () => {
+  const users = [
+    { user_id: 123, username: 'ali_reza', first_name: 'Ali', last_name: 'رضایی' },
+    { user_id: 456, username: null, first_name: 'Sara', last_name: null },
+    { user_id: 789, username: 'ERFAN', first_name: 'Erfan', last_name: null },
+  ];
+  assert.deepEqual(searchUsers(users, 'ali').map((u) => u.user_id), [123]);
+  assert.deepEqual(searchUsers(users, 'رضا').map((u) => u.user_id), [123]);
+  assert.deepEqual(searchUsers(users, 'sara').map((u) => u.user_id), [456]);
+  assert.deepEqual(searchUsers(users, 'erfan').map((u) => u.user_id), [789]);
+  assert.deepEqual(searchUsers(users, '456').map((u) => u.user_id), [456]);
+  assert.deepEqual(searchUsers(users, ''), []);
+  assert.deepEqual(searchUsers(users, 'nobody'), []);
+});
+
+test('buildUserRow keeps the wallet balance across interactions', () => {
+  const base = buildUserRow({ id: 5, first_name: 'X' }, null, 100, true);
+  assert.equal(base.balance, 0);
+  base.balance = 5000;
+  const next = buildUserRow({ id: 5, first_name: 'X' }, base, 200, true);
+  assert.equal(next.balance, 5000);
+});
 
 test('paginate slices 5 per page and clamps out-of-range pages', () => {
   const items = Array.from({ length: 12 }, (_, i) => i + 1);

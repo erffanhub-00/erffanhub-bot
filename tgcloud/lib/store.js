@@ -4,7 +4,7 @@
 
 import { db } from 'sdk';
 import { eq } from 'sdk/db';
-import { settings, users, downloads, files, file_parts, file_versions, github_cache } from '../schema.js';
+import { settings, users, downloads, files, file_parts, file_versions, github_cache, wallet_transactions } from '../schema.js';
 import { buildUserRow, nextFileId, groupCategories } from './pure.js';
 
 export async function getSetting(key) {
@@ -60,6 +60,103 @@ export async function trackUser(from, isMember) {
 export async function listUsers() {
   const rows = await db.select().from(users).all();
   return rows.sort((a, b) => (b.last_seen || 0) - (a.last_seen || 0));
+}
+
+// Change a file's price (owner only, /setprice in the DB group).
+// 0 means free. Returns the updated file.
+export async function setFilePrice(fileId, price) {
+  const p = Math.max(0, Number(price) || 0);
+  await db
+    .update(files)
+    .set({ price: p, updated_at: Date.now() })
+    .where(eq(files.id, fileId))
+    .run();
+  return getFile(fileId);
+}
+
+// --- Wallet: balances and the transaction ledger ---
+
+export async function getUserBalance(userId) {
+  const user = await getUser(userId);
+  return Number(user?.balance) || 0;
+}
+
+// Change a user's balance by delta (negative spends). The balance
+// never goes below zero; returns the new balance.
+export async function adjustUserBalance(userId, delta) {
+  const user = await getUser(userId);
+  if (!user) return 0;
+  const next = Math.max(0, (Number(user.balance) || 0) + (Number(delta) || 0));
+  await db
+    .update(users)
+    .set({ balance: next })
+    .where(eq(users.user_id, Number(userId)))
+    .run();
+  return next;
+}
+
+export async function insertTransaction({ userId, username, kind, amount, fileId, status, receiptFileId, receiptChatId, receiptMessageId }) {
+  const now = Date.now();
+  // No returning(): callers find the row later by receipt_message_id.
+  await db
+    .insert(wallet_transactions)
+    .values({
+      user_id: userId ?? null,
+      username: username ?? null,
+      kind,
+      amount: Number(amount) || 0,
+      file_id: fileId ?? null,
+      status: status || 'pending',
+      receipt_file_id: receiptFileId ?? null,
+      receipt_chat_id: receiptChatId ?? null,
+      receipt_message_id: receiptMessageId ?? null,
+      created_at: now,
+      decided_at: null,
+    })
+    .run();
+  return null;
+}
+
+// Find a top-up by its receipts-group message id — the approve /
+// reject buttons carry that id, so no insert id is ever needed.
+export async function getTransactionByReceiptMessage(messageId) {
+  if (!messageId) return null;
+  return db
+    .select()
+    .from(wallet_transactions)
+    .where(eq(wallet_transactions.receipt_message_id, Number(messageId)))
+    .get();
+}
+
+export async function updateTransactionStatus(id, status) {
+  await db
+    .update(wallet_transactions)
+    .set({ status, decided_at: Date.now() })
+    .where(eq(wallet_transactions.id, Number(id)))
+    .run();
+}
+
+export async function listTransactions() {
+  const rows = await db.select().from(wallet_transactions).all();
+  return rows.sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
+}
+
+export async function listUserTransactions(userId) {
+  const rows = await db
+    .select()
+    .from(wallet_transactions)
+    .where(eq(wallet_transactions.user_id, Number(userId)))
+    .all();
+  return rows.sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
+}
+
+export async function getPendingReceipts() {
+  const rows = await db
+    .select()
+    .from(wallet_transactions)
+    .where(eq(wallet_transactions.status, 'pending'))
+    .all();
+  return rows.sort((a, b) => (a.created_at || 0) - (b.created_at || 0));
 }
 
 // --- Files ---
@@ -129,7 +226,7 @@ export async function getAllParts(fileId) {
 }
 
 // Insert a new file (version 1) with its parts, plus the v1 snapshot.
-export async function insertFile({ id, title, description, category, kind, parts, dbChatId, dbMessageId, createdAt }) {
+export async function insertFile({ id, title, description, category, kind, parts, dbChatId, dbMessageId, createdAt, price }) {
   const now = createdAt || Date.now();
   const sizeTotal = parts.reduce((sum, p) => sum + (Number(p.size) || 0), 0);
   await db
@@ -139,6 +236,7 @@ export async function insertFile({ id, title, description, category, kind, parts
       title: title || null,
       description: description || null,
       category: (category || 'سایر').trim() || 'سایر',
+      price: Math.max(0, Number(price) || 0),
       version: 1,
       kind: kind || parts[0]?.kind || null,
       size_total: sizeTotal,
@@ -236,6 +334,28 @@ export async function insertVersion(file, parts, { title, description }) {
     .values({ file_id: file.id, version: newVersion, title: title ?? file.title, description: description ?? file.description, created_at: now })
     .run();
   return getFile(file.id);
+}
+
+// Create the file (or a new version) from a pending ingest state.
+// Shared by the message handler (title/price intake) and the callback
+// handler (free/premium buttons). The id is assigned by the caller.
+export async function finalizeIngest(state, id, title, description, price) {
+  if (state.mode === 'update') {
+    const file = await getFile(state.fileId);
+    if (!file) return null;
+    return insertVersion(file, state.parts, { title, description });
+  }
+  return insertFile({
+    id,
+    title,
+    description,
+    category: state.category || 'سایر',
+    kind: state.kind,
+    parts: state.parts,
+    dbChatId: state.dbChatId,
+    dbMessageId: state.dbMessageId,
+    price: price || 0,
+  });
 }
 
 // Delete a file and all its parts/versions/downloads rows. The Telegram

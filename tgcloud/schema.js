@@ -21,6 +21,8 @@ export const files = table('files', {
   description: text('description'),
   // Owner-chosen category; «سایر» when skipped.
   category: text('category'),
+  // Price in Toman. 0 = free; above 0 = premium (paid from the wallet).
+  price: integer('price').notNull().default(0),
   version: integer('version').notNull().default(1),
   kind: text('kind'),
   size_total: integer('size_total'),
@@ -70,6 +72,26 @@ export const downloads = table('downloads', {
   downloaded_at: integer('downloaded_at'),
 });
 
+// Wallet ledger: card-to-card top-ups (kind 'charge', status starts
+// 'pending' until the owner approves the receipt in the receipts
+// group) and premium file purchases (kind 'purchase', status
+// 'approved' immediately). Amount is signed: charges positive,
+// purchases negative. Rows are never deleted — money history stays.
+export const wallet_transactions = table('wallet_transactions', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  user_id: integer('user_id'),
+  username: text('username'),
+  kind: text('kind'),
+  amount: integer('amount'),
+  file_id: text('file_id'),
+  status: text('status'),
+  receipt_file_id: text('receipt_file_id'),
+  receipt_chat_id: integer('receipt_chat_id'),
+  receipt_message_id: integer('receipt_message_id'),
+  created_at: integer('created_at').default(sql`(unixepoch())`),
+  decided_at: integer('decided_at'),
+});
+
 // One row per Telegram user that ever interacted with the bot.
 // Every column comes from the Telegram update itself; first_seen is set
 // once, last_seen and is_member are updated on every interaction.
@@ -83,6 +105,9 @@ export const users = table('users', {
   // Optional phone, shared by the user on download (never requested
   // as a condition — delivery never waits for it). Null = never shared.
   phone: text('phone'),
+  // Wallet balance in Toman. Topped up by card-to-card receipts the
+  // owner approves; premium file prices are deducted from it.
+  balance: integer('balance').notNull().default(0),
   first_seen: integer('first_seen'),
   last_seen: integer('last_seen'),
   is_member: integer('is_member'),

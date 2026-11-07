@@ -1,7 +1,8 @@
-# ErffanHub Files — v1.0.0
+# ErffanHub Files — v2.0.0
 
 A public Telegram bot on **Telegram Serverless** (no server, no
-Cloudflare Worker, no Mini App): a showcase + file library for Erfan.
+Cloudflare Worker, no Mini App): a showcase + file library + wallet
+for Erfan.
 
 - **Force-join:** the bot is connected to his channel and a public
   group. On `/start` it checks membership in both; until the user
@@ -39,9 +40,25 @@ Cloudflare Worker, no Mini App): a showcase + file library for Erfan.
   `/stats`.
 - **Owner stats:** `/stats` (owner only) shows file stats (per-file
   downloads, last downloaded) and user stats (totals, new users,
-  user list, per-user download history).
-- **Anti-clutter:** all navigation happens in ONE message edited in
-  place. The only new messages are the delivered files themselves.
+  user list, per-user download history). It also has user search
+  (by name, username or id), a transactions list and a broadcast
+  button («📣 اطلاع‌رسانی به همه») plus per-user messaging.
+- **Premium files + wallet:** a file can be free or premium (price in
+  Toman). The owner picks free/premium at ingest and types the price
+  (`/setprice F001 50000` changes it later; 0 = free). A premium
+  download is paid from the user's wallet balance, shown in the main
+  menu. Top-ups are card-to-card: the user sees the owner's card
+  number, picks an amount and sends a receipt photo. Receipts land
+  in a separate private receipts group with ✅ تایید / ❌ رد buttons;
+  approval credits the wallet (and auto-delivers a pending premium
+  file), rejection notifies the user and deletes the receipt message.
+  No monthly subscription — every premium file has its own price.
+- **Anti-clutter:** every screen is shown by deleting the previous
+  screen message and sending a fresh one at the bottom of the chat,
+  so the active screen is always the last message. The user's own
+  command/text messages are deleted after handling. The only new
+  messages are the delivered files themselves. Every screen ends
+  with a generic «◀ بازگشت» button and «🏠 منوی اصلی».
 
 ## Setup
 
@@ -49,21 +66,25 @@ Cloudflare Worker, no Mini App): a showcase + file library for Erfan.
    it on. Get the CLI access token (Serverless → CLI Access → Access
    token). Its form is `app<id>:<secret>` — this is NOT the bot API
    token.
-2. **Create the channel, the public group and the private DB group.**
-   Add the bot as **admin in the channel** (so it can check
-   membership) and as a **member in both groups**.
+2. **Create the channel, the public group, the private DB group and
+   the private receipts group.** Add the bot as **admin in the
+   channel** (so it can check membership), as **admin in the DB group
+   and the receipts group** (delete rights, so it can clean up) and
+   as a **member in the public group**.
 3. **Fill `tgcloud/lib/config.js`:** `OWNER_TELEGRAM_ID`,
-   `CHANNEL_ID`, `GROUP_ID`, `DB_GROUP_ID`, `CHANNEL_URL`,
-   `GROUP_URL`. Get the ids with `/id` after the first deploy, or
-   from @userinfobot / @getmyid_bot. The repo copy keeps placeholders
-   (`0` / `''`) — never commit real ids.
+   `CHANNEL_ID`, `GROUP_ID`, `DB_GROUP_ID`, `RECEIPTS_GROUP_ID`,
+   `CHANNEL_URL`, `GROUP_URL`, `CARD_NUMBER`. Get the ids with `/id`
+   after the first deploy, or from @userinfobot / @getmyid_bot. The
+   repo copy keeps placeholders (`0` / `''`) — never commit real ids
+   or the card number.
 4. **Deploy:**
    ```sh
    npm install
    npx tgcloud login        # paste the app<id>:<secret> token
    npx tgcloud push
    npx tgcloud migrate      # creates settings, files, file_parts,
-                            # file_versions, downloads, users, github_cache
+                            # file_versions, downloads, users, github_cache,
+                            # wallet_transactions (+ price/balance columns)
    ```
 5. **Try it:** `/start` in the bot. In the DB group, send a file and
    follow the bot's prompts.
@@ -76,7 +97,8 @@ Cloudflare Worker, no Mini App): a showcase + file library for Erfan.
 - `/files` — browse the file library (categories first)
 - `/get F001` — open a file by id (bare `F001` also works)
 - `/search` — search files by name (title, description, category, file name)
-- `/stats` — owner-only stats (files + users)
+- `/wallet` — wallet balance, top-up and my transactions
+- `/stats` — owner-only stats (files + users + wallet + notify)
 - `/id` — this chat's id and your Telegram id
 - `/help` — help
 
@@ -85,9 +107,15 @@ DB group (owner only):
 - `/bundle` — start a multi-part bundle, `/done` to finish it
 - `/update F001` — new version of a file
 - `/setcat F001 <category>` — change a file's category
+- `/setprice F001 50000` — change a file's price (0 = free)
 - `/del F001` — delete a file (with confirm)
 - `/list` — list all files
 - `/cancel` — cancel a pending input
+
+Receipts group (owner only):
+
+- `/rx <messageId> ok|no` — approve or reject a receipt by its message
+  number (fallback for the ✅ / ❌ buttons)
 
 ## Test
 

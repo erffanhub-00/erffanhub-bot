@@ -1,20 +1,29 @@
-// Message handler (v1). Three contexts:
+// Message handler (v2). Three contexts:
 // - Private chat: force-join gate, then menu / projects / socials /
-//   files / search / file view / download / owner stats.
-// - DB group (owner only): file ingest, bundles, updates, delete, list.
+//   files / search / file view / download / wallet / owner stats.
+// - DB group (owner only): file ingest, bundles, updates, delete, list,
+//   price setting.
+// - Receipts group (owner only): /id and the manual /rx fallback.
 // - Any other group: ignored.
-// User tracking runs on every interaction (users table). The bot never
-// asks a user for personal information.
+// Navigation model: every screen is shown by deleting the previous
+// screen message and sending a fresh one at the bottom of the chat
+// (the stored screen id lives in settings). Delivered files are new
+// messages and stay; the user's own command/text messages are deleted
+// after handling (best-effort; Telegram forbids deleting messages
+// older than 48 hours). User tracking runs on every interaction.
+// The bot never asks a user for personal information.
 
 import { api } from 'sdk';
 import { isOwner } from '../lib/auth.js';
-import { SOCIALS } from '../lib/config.js';
+import { SOCIALS, RECEIPTS_GROUP_ID } from '../lib/config.js';
 import {
   extractFileMeta,
   parseFileId,
   parseTitleDescription,
+  parseAmount,
   categoryOptions,
   normalizeDigits,
+  isPremiumFile,
 } from '../lib/pure.js';
 import {
   getSetting,
@@ -24,30 +33,43 @@ import {
   takeNextFileId,
   listFiles,
   getFile,
-  insertFile,
-  insertVersion,
+  finalizeIngest,
   setFileCategory,
+  setFilePrice,
   setUserPhone,
   listCategories,
+  getUser,
+  getUserBalance,
+  listUserTransactions,
+  insertTransaction,
+  getTransactionByReceiptMessage,
 } from '../lib/store.js';
 import {
   checkMembership,
   membershipPassed,
   missingMembership,
   isDbGroup,
+  isReceiptsGroup,
   searchLibrary,
+  searchStatsUsers,
   getStatsData,
   getStatsUsers,
   getFileViewModel,
   countDownloads,
   deliverParts,
+  purchaseFile,
+  settleReceipt,
+  receiptCaptionText,
+  receiptApprovedText,
 } from '../lib/library.js';
 import { getProjects } from '../lib/github.js';
+import { receiptKeyboard } from '../lib/keyboards.js';
 import {
   HELP_TEXT,
   mainMenuView,
   helpView,
   errorView,
+  dbErrorView,
   joinView,
   projectsView,
   socialsView,
@@ -55,59 +77,32 @@ import {
   categoriesView,
   fileView,
   searchPromptView,
+  walletView,
+  chargeAmountView,
+  chargeCustomAmountView,
+  receiptSentView,
+  premiumPayView,
   statsView,
-  statsUsersView,
-  statsUserView,
-  statsFilesView,
-  statsFileView,
+  userSearchPromptView,
+  userSearchResultsView,
+  notifyPromptView,
+  notifyConfirmView,
   confirmDeleteView,
   promptTitleView,
+  pricePromptView,
+  priceAmountPromptView,
   titleSavedView,
 } from '../lib/views.js';
 
-async function sendScreen(chatId, view) {
-  const sent = await api.sendMessage({
-    chat_id: chatId,
-    text: view.text,
-    ...(view.reply_markup ? { reply_markup: view.reply_markup } : {}),
-  });
-  return sent?.message_id ?? null;
-}
-
-async function replaceScreen(chatId, messageId, view) {
-  try {
-    await api.editMessageText({
-      chat_id: chatId,
-      message_id: messageId,
-      text: view.text,
-      ...(view.reply_markup ? { reply_markup: view.reply_markup } : {}),
-    });
-    return messageId;
-  } catch {
-    return sendScreen(chatId, view);
-  }
-}
-
-async function editTextBestEffort(chatId, messageId, text, replyMarkup) {
-  try {
-    await api.editMessageText({
-      chat_id: chatId,
-      message_id: messageId,
-      text,
-      ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
-    });
-    return true;
-  } catch {
-    return false;
-  }
-}
+const screenKey = (userId) => `screen:${userId}`;
+const screenDbKey = (ownerId) => `screen_db:${ownerId}`;
 
 async function deleteMessageBestEffort(chatId, messageId) {
   if (!messageId) return;
   try {
     await api.deleteMessage({ chat_id: chatId, message_id: messageId });
   } catch {
-    // The user's own message cannot always be deleted; ignore.
+    // Messages older than 48h cannot be deleted; ignore.
   }
 }
 
@@ -118,16 +113,57 @@ function parseStoredMessage(value) {
   return { chatId: Number(chatId), messageId: Number(messageId) };
 }
 
+async function deleteStoredScreen(key) {
+  const stored = parseStoredMessage(await getSetting(key));
+  if (!stored) return;
+  await deleteSetting(key);
+  await deleteMessageBestEffort(stored.chatId, stored.messageId);
+}
+
+// Show a screen: delete the previous screen for this key, then send
+// a fresh message at the bottom of the chat and remember it. Returns
+// the new message id. `replyTo` threads the message under another one
+// (the DB-group title prompt).
+async function showScreen(chatId, view, key, replyTo) {
+  if (key) await deleteStoredScreen(key);
+  const sent = await api.sendMessage({
+    chat_id: chatId,
+    text: view.text,
+    ...(view.reply_markup ? { reply_markup: view.reply_markup } : {}),
+    ...(replyTo ? { reply_to_message_id: replyTo } : {}),
+  });
+  const id = sent?.message_id ?? null;
+  if (key && id) await setSetting(key, `${chatId}:${id}`);
+  return id;
+}
+
+async function showPrivate(chatId, userId, view) {
+  return showScreen(chatId, view, screenKey(userId));
+}
+
+async function showDb(chatId, ownerId, view, replyTo) {
+  return showScreen(chatId, view, screenDbKey(ownerId), replyTo);
+}
+
 async function clearOwnerPending(ownerId) {
   await deleteSetting(`pending_title:${ownerId}`);
   await deleteSetting(`pending_bundle:${ownerId}`);
   await deleteSetting(`pending_update:${ownerId}`);
   await deleteSetting(`pending_catname:${ownerId}`);
+  await deleteSetting(`pending_price:${ownerId}`);
+  await deleteSetting(`pending_price_amount:${ownerId}`);
 }
 
 async function clearUserPending(userId) {
   await deleteSetting(`pending_search:${userId}`);
   await deleteSetting(`search_query:${userId}`);
+  await deleteSetting(`pending_charge_amount:${userId}`);
+  await deleteSetting(`pending_charge_receipt:${userId}`);
+  await deleteSetting(`pending_usersearch:${userId}`);
+  await deleteSetting(`user_search_query:${userId}`);
+  await deleteSetting(`pending_broadcast:${userId}`);
+  await deleteSetting(`pending_broadcast_text:${userId}`);
+  await deleteSetting(`pending_notify_user:${userId}`);
 }
 
 // --- Force-join gate (private chat). Returns true when the user may
@@ -139,55 +175,35 @@ async function ensureMember(chatId, userId) {
     return true;
   }
   await trackUser({ id: userId }, false);
-  await sendScreen(chatId, joinView(missingMembership(check)));
+  await showPrivate(chatId, userId, joinView(missingMembership(check)));
   return false;
 }
 
-async function showFile(chatId, fileId, version) {
+async function showFile(chatId, userId, fileId, version) {
   const model = await getFileViewModel(fileId, version);
   if (!model) {
-    await sendScreen(chatId, errorView('فایلی با این شماره نیست.'));
+    await showPrivate(chatId, userId, errorView('فایلی با این شماره نیست.'));
     return;
   }
   const count = await countDownloads(fileId, model.view.version);
-  await sendScreen(chatId, fileView(model.view, model.parts, model.versions, count));
+  const balance = await getUserBalance(userId);
+  await showPrivate(chatId, userId, fileView(model.view, model.parts, model.versions, count, balance));
 }
 
 // --- Owner stats (owner only). ---
-async function showStats(chatId) {
+async function showStats(chatId, userId) {
   const s = await getStatsData();
-  await sendScreen(chatId, statsView(s));
+  await showPrivate(chatId, userId, statsView(s));
 }
 
 // --- DB group: title/description/category intake for a pending
 // ingest. state: { mode: 'new'|'bundle'|'update', fileId?, parts,
 //   kind, category, dbChatId, dbMessageId, askChat, askMsg }
-async function finalizeIngest(ownerId, state, id, title, description) {
-  if (state.mode === 'update') {
-    const file = await getFile(state.fileId);
-    if (!file) return null;
-    const updated = await insertVersion(file, state.parts, { title, description });
-    return updated;
-  }
-  const created = await insertFile({
-    id,
-    title,
-    description,
-    category: state.category || 'سایر',
-    kind: state.kind,
-    parts: state.parts,
-    dbChatId: state.dbChatId,
-    dbMessageId: state.dbMessageId,
-  });
-  return created;
-}
-
-async function finishTitle(ownerId, ask, done, failText) {
-  await deleteSetting(`pending_title:${ownerId}`);
+async function finishTitle(chatId, ownerId, done, failText) {
   if (done) {
-    await replaceScreen(ask.chatId, ask.messageId, titleSavedView(done));
+    await showDb(chatId, ownerId, titleSavedView(done));
   } else {
-    await replaceScreen(ask.chatId, ask.messageId, errorView(failText));
+    await showDb(chatId, ownerId, dbErrorView(failText));
   }
 }
 
@@ -201,16 +217,17 @@ async function handlePendingTitle(chatId, messageId, ownerId, text) {
     await deleteSetting(`pending_title:${ownerId}`);
     return false;
   }
-  const ask = { chatId: state.askChat, messageId: state.askMsg };
   const trimmed = String(text || '').trim();
 
-  // Update flow: «همون» keeps the old title and description.
+  // Update flow: «همون» keeps the old title and description (and the
+  // old price — updates never ask for a price).
   if (state.mode === 'update' && trimmed === 'همون') {
     const file = await getFile(state.fileId);
     const done = file
-      ? await finalizeIngest(ownerId, state, null, file.title, file.description)
+      ? await finalizeIngest(state, null, file.title, file.description, 0)
       : null;
-    await finishTitle(ownerId, ask, done, 'ثبت ورژن جدید ممکن نشد.');
+    await deleteSetting(`pending_title:${ownerId}`);
+    await finishTitle(chatId, ownerId, done, 'ثبت ورژن جدید ممکن نشد.');
     await deleteMessageBestEffort(chatId, messageId);
     return true;
   }
@@ -221,18 +238,47 @@ async function handlePendingTitle(chatId, messageId, ownerId, text) {
     const title = parsed.title || file?.title || null;
     const description = parsed.description ?? file?.description ?? null;
     const done = file
-      ? await finalizeIngest(ownerId, state, null, title, description)
+      ? await finalizeIngest(state, null, title, description, 0)
       : null;
-    await finishTitle(ownerId, ask, done, 'ثبت ورژن جدید ممکن نشد.');
+    await deleteSetting(`pending_title:${ownerId}`);
+    await finishTitle(chatId, ownerId, done, 'ثبت ورژن جدید ممکن نشد.');
     await deleteMessageBestEffort(chatId, messageId);
     return true;
   }
 
-  // New file / bundle: the id is always auto-sequential; the bot
-  // never asks for a number.
+  // New file / bundle: ask free vs premium first; the id is assigned
+  // at save time (auto-sequential — the bot never asks for a number).
+  await setSetting(
+    `pending_price:${ownerId}`,
+    JSON.stringify({ ...state, title: parsed.title || null, description: parsed.description || null }),
+  );
+  await deleteSetting(`pending_title:${ownerId}`);
+  await showDb(chatId, ownerId, pricePromptView(parsed.title || null));
+  await deleteMessageBestEffort(chatId, messageId);
+  return true;
+}
+
+// Premium price intake (after the owner tapped «💰 پرمیوم»).
+async function handlePendingPriceAmount(chatId, messageId, ownerId, text) {
+  const raw = await getSetting(`pending_price_amount:${ownerId}`);
+  if (!raw) return false;
+  let state;
+  try {
+    state = JSON.parse(raw);
+  } catch {
+    await deleteSetting(`pending_price_amount:${ownerId}`);
+    return false;
+  }
+  const price = parseAmount(text, true);
+  if (price === null) {
+    await showDb(chatId, ownerId, priceAmountPromptView('مبلغ درست نیست. یک عدد به تومان بفرستید.'));
+    await deleteMessageBestEffort(chatId, messageId);
+    return true;
+  }
+  await deleteSetting(`pending_price_amount:${ownerId}`);
   const id = await takeNextFileId();
-  const done = await finalizeIngest(ownerId, state, id, parsed.title || null, parsed.description || null);
-  await finishTitle(ownerId, ask, done, 'ثبت فایل ممکن نشد.');
+  const done = await finalizeIngest(state, id, state.title, state.description, price);
+  await finishTitle(chatId, ownerId, done, 'ثبت فایل ممکن نشد.');
   await deleteMessageBestEffort(chatId, messageId);
   return true;
 }
@@ -258,11 +304,12 @@ async function handlePendingCategoryName(chatId, messageId, ownerId, text) {
   if (state.category && !names.includes(state.category)) {
     names.unshift(state.category);
   }
-  await replaceScreen(
+  const id = await showDb(
     state.askChat,
-    state.askMsg,
+    ownerId,
     promptTitleView(names, state.category || 'سایر', state.mode === 'bundle'),
   );
+  state.askMsg = id;
   await setSetting(`pending_title:${ownerId}`, JSON.stringify(state));
   await deleteMessageBestEffort(chatId, messageId);
   return true;
@@ -274,30 +321,25 @@ async function askForTitle(ownerId, state) {
   const names = categoryOptions(await listFiles());
   state.category = state.category || 'سایر';
   const view = promptTitleView(names, state.category, state.mode === 'bundle');
-  const sent = await api.sendMessage({
-    chat_id: state.dbChatId,
-    text: view.text,
-    reply_to_message_id: state.dbMessageId || undefined,
-    reply_markup: view.reply_markup,
-  });
+  const id = await showScreen(state.dbChatId, view, screenDbKey(ownerId), state.dbMessageId || undefined);
   state.askChat = state.dbChatId;
-  state.askMsg = sent?.message_id ?? null;
+  state.askMsg = id;
   await setSetting(`pending_title:${ownerId}`, JSON.stringify(state));
-  return sent?.message_id ?? null;
+  return id;
 }
-
 
 // --- DB group: incoming file. ---
 async function handleDbGroupFile(chatId, message, ownerId) {
   const meta = extractFileMeta(message);
   if (!meta) return false;
-  // One pending title at a time: finish it before sending the next file.
-  if (await getSetting(`pending_title:${ownerId}`)) {
-    await api.sendMessage({
-      chat_id: chatId,
-      text: 'اول عنوان فایل قبلی را بفرستید، بعد فایل بعدی را ارسال کنید.',
-      reply_to_message_id: message.message_id,
-    });
+  // One pending title/price at a time: finish it before sending the
+  // next file.
+  if (
+    (await getSetting(`pending_title:${ownerId}`)) ||
+    (await getSetting(`pending_price:${ownerId}`)) ||
+    (await getSetting(`pending_price_amount:${ownerId}`))
+  ) {
+    await showDb(chatId, ownerId, dbErrorView('اول فایل قبلی را کامل کنید، بعد فایل بعدی را ارسال کنید.'));
     return true;
   }
   const bundleRaw = await getSetting(`pending_bundle:${ownerId}`);
@@ -310,10 +352,8 @@ async function handleDbGroupFile(chatId, message, ownerId) {
     }
     bundle.parts.push({ ...meta, kind: meta.kind });
     await setSetting(`pending_bundle:${ownerId}`, JSON.stringify(bundle));
-    await api.sendMessage({
-      chat_id: chatId,
+    await showDb(chatId, ownerId, {
       text: `پارت ${bundle.parts.length} ثبت شد. برای پایان /done را بفرستید.`,
-      reply_to_message_id: message.message_id,
     });
     return true;
   }
@@ -339,21 +379,23 @@ const DB_GROUP_HELP =
   '/done — پایان بسته و درخواست عنوان\n' +
   '/update F001 — ورژن جدید برای یک فایل\n' +
   '/setcat F001 پرامپت — تغییر دسته یک فایل\n' +
+  '/setprice F001 50000 — تغییر قیمت یک فایل (صفر یعنی رایگان)\n' +
   '/del F001 — حذف یک فایل\n' +
   '/list — لیست فایل‌ها\n' +
   '/cancel — لغو ورودی در انتظار\n' +
-  'فایل بفرستید تا شناسه بگیرد؛ عنوان و توضیح و دسته را همان‌جا می‌دهید.';
+  'فایل بفرستید تا شناسه بگیرد؛ عنوان و توضیح و دسته و قیمت را همان‌جا می‌دهید.';
 
 async function handleDbGroupCommand(chatId, messageId, ownerId, text) {
+  await deleteMessageBestEffort(chatId, messageId);
   const parts = text.split(/\s+/);
   const command = parts[0].split('@')[0];
   if (command === '/bundle') {
     if (await getSetting(`pending_title:${ownerId}`)) {
-      await sendScreen(chatId, errorView('اول عنوان فایل قبلی را بفرستید.'));
+      await showDb(chatId, ownerId, dbErrorView('اول عنوان فایل قبلی را بفرستید.'));
       return;
     }
     if (await getSetting(`pending_bundle:${ownerId}`)) {
-      await sendScreen(chatId, errorView('بسته در حال ساخت است؛ فایل‌ها را بفرستید و /done را بزنید.'));
+      await showDb(chatId, ownerId, dbErrorView('بسته در حال ساخت است؛ فایل‌ها را بفرستید و /done را بزنید.'));
       return;
     }
     const updateFor = await getSetting(`pending_update:${ownerId}`);
@@ -361,7 +403,7 @@ async function handleDbGroupCommand(chatId, messageId, ownerId, text) {
       `pending_bundle:${ownerId}`,
       JSON.stringify({ updateFor: updateFor || null, parts: [] }),
     );
-    await sendScreen(chatId, {
+    await showDb(chatId, ownerId, {
       text: 'حالت بسته شروع شد. پارت‌ها را پشت سر هم بفرستید و آخرش /done را بزنید.',
     });
     return;
@@ -369,7 +411,7 @@ async function handleDbGroupCommand(chatId, messageId, ownerId, text) {
   if (command === '/done') {
     const bundleRaw = await getSetting(`pending_bundle:${ownerId}`);
     if (!bundleRaw) {
-      await sendScreen(chatId, errorView('بسته‌ای در حال ساخت نیست. اول /bundle را بفرستید.'));
+      await showDb(chatId, ownerId, dbErrorView('بسته‌ای در حال ساخت نیست. اول /bundle را بفرستید.'));
       return;
     }
     let bundle;
@@ -379,7 +421,7 @@ async function handleDbGroupCommand(chatId, messageId, ownerId, text) {
       bundle = { updateFor: null, parts: [] };
     }
     if (!bundle.parts || bundle.parts.length === 0) {
-      await sendScreen(chatId, errorView('هنوز پارتی نفرستاده‌اید.'));
+      await showDb(chatId, ownerId, dbErrorView('هنوز پارتی نفرستاده‌اید.'));
       return;
     }
     await deleteSetting(`pending_bundle:${ownerId}`);
@@ -400,16 +442,16 @@ async function handleDbGroupCommand(chatId, messageId, ownerId, text) {
   if (command === '/update') {
     const id = parseFileId(parts[1] || '');
     if (!id) {
-      await sendScreen(chatId, errorView('شناسه فایل را بفرستید. مثال: /update F001'));
+      await showDb(chatId, ownerId, dbErrorView('شناسه فایل را بفرستید. مثال: /update F001'));
       return;
     }
     const file = await getFile(id);
     if (!file) {
-      await sendScreen(chatId, errorView('فایلی با این شماره نیست.'));
+      await showDb(chatId, ownerId, dbErrorView('فایلی با این شماره نیست.'));
       return;
     }
     await setSetting(`pending_update:${ownerId}`, id);
-    await sendScreen(chatId, {
+    await showDb(chatId, ownerId, {
       text: `ورژن جدید برای ${id} «${file.title || '(بدون عنوان)'}».\nفایل جدید را بفرستید (برای چندپارتی اول /bundle). بعد توضیح جدید را می‌دهید یا «همون» را بفرستید.`,
     });
     return;
@@ -418,51 +460,135 @@ async function handleDbGroupCommand(chatId, messageId, ownerId, text) {
     const id = parseFileId(parts[1] || '');
     const category = parts.slice(2).join(' ').trim();
     if (!id || !category) {
-      await sendScreen(chatId, errorView('مثال: /setcat F001 پرامپت'));
+      await showDb(chatId, ownerId, dbErrorView('مثال: /setcat F001 پرامپت'));
       return;
     }
     const file = await getFile(id);
     if (!file) {
-      await sendScreen(chatId, errorView('فایلی با این شماره نیست.'));
+      await showDb(chatId, ownerId, dbErrorView('فایلی با این شماره نیست.'));
       return;
     }
     const updated = await setFileCategory(id, category);
-    await sendScreen(chatId, {
+    await showDb(chatId, ownerId, {
       text: `دسته ${id} به «${updated?.category || category}» تغییر کرد.`,
+    });
+    return;
+  }
+  if (command === '/setprice') {
+    const id = parseFileId(parts[1] || '');
+    const price = parseAmount(parts.slice(2).join(' '), true);
+    if (!id || price === null) {
+      await showDb(chatId, ownerId, dbErrorView('مثال: /setprice F001 50000 — صفر یعنی رایگان.'));
+      return;
+    }
+    const file = await getFile(id);
+    if (!file) {
+      await showDb(chatId, ownerId, dbErrorView('فایلی با این شماره نیست.'));
+      return;
+    }
+    const updated = await setFilePrice(id, price);
+    await showDb(chatId, ownerId, {
+      text:
+        price > 0
+          ? `قیمت ${id} شد ${price.toLocaleString('fa-IR')} تومان (پرمیوم).`
+          : `فایل ${id} رایگان شد.`,
     });
     return;
   }
   if (command === '/del') {
     const id = parseFileId(parts[1] || '');
     if (!id) {
-      await sendScreen(chatId, errorView('شناسه فایل را بفرستید. مثال: /del F001'));
+      await showDb(chatId, ownerId, dbErrorView('شناسه فایل را بفرستید. مثال: /del F001'));
       return;
     }
     const file = await getFile(id);
     if (!file) {
-      await sendScreen(chatId, errorView('فایلی با این شماره نیست.'));
+      await showDb(chatId, ownerId, dbErrorView('فایلی با این شماره نیست.'));
       return;
     }
-    await sendScreen(chatId, confirmDeleteView(file));
+    await showDb(chatId, ownerId, confirmDeleteView(file));
     return;
   }
   if (command === '/list') {
     const all = await listFiles();
-    await sendScreen(chatId, filesView(all, 0, null));
+    await showDb(chatId, ownerId, filesView(all, 0, null, 'db:cls', true));
     return;
   }
   if (command === '/cancel') {
     await clearOwnerPending(ownerId);
-    await sendScreen(chatId, { text: 'لغو شد.' });
+    await showDb(chatId, ownerId, { text: 'لغو شد.' });
     return;
   }
   if (command === '/id') {
-    await sendScreen(chatId, { text: `آیدی این چت: ${chatId}\nآیدی شما: ${ownerId}` });
+    await showDb(chatId, ownerId, { text: `آیدی این چت: ${chatId}\nآیدی شما: ${ownerId}` });
     return;
   }
   if (command === '/help') {
-    await sendScreen(chatId, { text: DB_GROUP_HELP });
+    await showDb(chatId, ownerId, { text: DB_GROUP_HELP });
     return;
+  }
+  return false;
+}
+
+// --- Receipts group: manual /rx fallback + /id. Buttons live in the
+// callback handler. Receipts are records — never auto-deleted, except
+// rejected ones (deleted when the owner rejects them). ---
+async function handleReceiptsGroupCommand(chatId, messageId, ownerId, text) {
+  await deleteMessageBestEffort(chatId, messageId);
+  const parts = text.split(/\s+/);
+  const command = parts[0].split('@')[0];
+  if (command === '/id') {
+    await api.sendMessage({
+      chat_id: chatId,
+      text: `آیدی این چت: ${chatId}\nآیدی شما: ${ownerId}`,
+    });
+    return true;
+  }
+  if (command === '/rx') {
+    const mid = Number(parts[1] || 0);
+    const decision = String(parts[2] || '').toLowerCase();
+    if (!mid || (decision !== 'ok' && decision !== 'no')) {
+      await api.sendMessage({
+        chat_id: chatId,
+        text: 'مثال: /rx 123 ok — تایید رسید با آن شماره پیام، یا /rx 123 no برای رد.',
+      });
+      return true;
+    }
+    const tx = await getTransactionByReceiptMessage(mid);
+    const res = await settleReceipt(tx, decision === 'ok');
+    if (res.status === 'missing') {
+      await api.sendMessage({ chat_id: chatId, text: `رسیدی با شماره پیام ${mid} پیدا نشد.` });
+      return true;
+    }
+    if (res.status === 'already') {
+      await api.sendMessage({ chat_id: chatId, text: `رسید ${mid} قبلاً بررسی شده است.` });
+      return true;
+    }
+    if (res.status === 'approved') {
+      try {
+        await api.editMessageCaption({
+          chat_id: chatId,
+          message_id: mid,
+          caption: receiptApprovedText(tx, await getUser(tx.user_id)),
+        });
+      } catch {
+        // Caption edit is cosmetic; the money already moved.
+      }
+      try {
+        await api.editMessageReplyMarkup({
+          chat_id: chatId,
+          message_id: mid,
+          reply_markup: { inline_keyboard: [] },
+        });
+      } catch {
+        // Buttons stay; the receipt is already decided (idempotent).
+      }
+      await api.sendMessage({ chat_id: chatId, text: `رسید ${mid} تایید شد.` });
+      return true;
+    }
+    await deleteMessageBestEffort(chatId, mid);
+    await api.sendMessage({ chat_id: chatId, text: `رسید ${mid} رد شد و پیامش پاک شد.` });
+    return true;
   }
   return false;
 }
@@ -471,6 +597,7 @@ async function handleDbGroupCommand(chatId, messageId, ownerId, text) {
 // Deliver a file the user asked for but was waiting on the optional
 // phone prompt (contact shared, or «ادامه بدون شماره»). Returns
 // false when nothing was pending. The file is always delivered.
+// A premium file is paid for here, at delivery time — never before.
 async function deliverPending(chatId, userId, from) {
   const raw = await getSetting(`pending_delivery:${userId}`);
   if (!raw) return false;
@@ -484,26 +611,175 @@ async function deliverPending(chatId, userId, from) {
   if (!pending?.fileId) return false;
   const model = await getFileViewModel(pending.fileId, pending.version || null);
   if (!model) {
-    await sendScreen(chatId, errorView('فایل پیدا نشد.'));
+    await showPrivate(chatId, userId, errorView('فایل پیدا نشد.'));
     return true;
   }
+  if (isPremiumFile(model.view)) {
+    const bought = await purchaseFile(from, model.view, model.view.version);
+    if (bought.error) {
+      await setSetting(
+        `pending_purchase:${userId}`,
+        JSON.stringify({ fileId: pending.fileId, version: model.view.version }),
+      );
+      await showPrivate(chatId, userId, premiumPayView(model.view, bought.balance));
+      return true;
+    }
+  }
   const res = await deliverParts(chatId, model.view, model.view.version, model.parts, from, true);
-  if (res.error) await sendScreen(chatId, errorView(res.error));
+  if (res.error) await showPrivate(chatId, userId, errorView(res.error));
   return true;
 }
 
 async function handlePendingSearch(chatId, messageId, userId, text) {
-  const stored = parseStoredMessage(await getSetting(`pending_search:${userId}`));
-  if (!stored) return false;
+  if (!(await getSetting(`pending_search:${userId}`))) return false;
   const query = text.trim();
   await deleteSetting(`pending_search:${userId}`);
   if (!query) {
-    await replaceScreen(stored.chatId, stored.messageId, searchPromptView('متن جستجو خالی است.'));
+    await showPrivate(chatId, userId, searchPromptView('متن جستجو خالی است.'));
+    await deleteMessageBestEffort(chatId, messageId);
     return true;
   }
   await setSetting(`search_query:${userId}`, query);
   const results = await searchLibrary(query);
-  await replaceScreen(stored.chatId, stored.messageId, filesView(results, 0, query));
+  await showPrivate(chatId, userId, filesView(results, 0, query));
+  await deleteMessageBestEffort(chatId, messageId);
+  return true;
+}
+
+// --- Private chat: wallet top-up intake. ---
+// Custom amount typed by the user (after «مبلغ دلخواه»).
+async function handlePendingChargeAmount(chatId, messageId, userId, text) {
+  if (!(await getSetting(`pending_charge_amount:${userId}`))) return false;
+  const amount = parseAmount(text, false);
+  if (amount === null) {
+    await showPrivate(chatId, userId, chargeCustomAmountView('مبلغ درست نیست. یک عدد به تومان بفرستید.'));
+    await deleteMessageBestEffort(chatId, messageId);
+    return true;
+  }
+  await deleteSetting(`pending_charge_amount:${userId}`);
+  await setSetting(`pending_charge_receipt:${userId}`, JSON.stringify({ amount }));
+  await showPrivate(chatId, userId, chargeAmountView(amount));
+  await deleteMessageBestEffort(chatId, messageId);
+  return true;
+}
+
+// Receipt photo for a pending top-up: copy it into the receipts group
+// with approve/reject buttons and record a pending transaction.
+async function handleReceiptPhoto(chatId, message, userId, from) {
+  const raw = await getSetting(`pending_charge_receipt:${userId}`);
+  if (!raw) return false;
+  let pending;
+  try {
+    pending = JSON.parse(raw);
+  } catch {
+    await deleteSetting(`pending_charge_receipt:${userId}`);
+    return false;
+  }
+  const amount = Number(pending?.amount) || 0;
+  if (!amount) {
+    await deleteSetting(`pending_charge_receipt:${userId}`);
+    return false;
+  }
+  const sizes = Array.isArray(message.photo)
+    ? [...message.photo].sort((a, b) => (b.file_size || 0) - (a.file_size || 0))
+    : [];
+  const photo = sizes[0];
+  if (!photo?.file_id) return false;
+  if (!RECEIPTS_GROUP_ID) {
+    await deleteSetting(`pending_charge_receipt:${userId}`);
+    await showPrivate(chatId, userId, errorView('گروه تراکنش‌ها هنوز تنظیم نشده است. صاحب بات باید آن را بسازد.'));
+    return true;
+  }
+  const sent = await api.sendPhoto({
+    chat_id: RECEIPTS_GROUP_ID,
+    photo: photo.file_id,
+    caption: receiptCaptionText({ user_id: userId, amount }, from),
+  });
+  const mid = sent?.message_id ?? null;
+  if (!mid) {
+    await showPrivate(chatId, userId, errorView('ارسال رسید ممکن نشد. دوباره امتحان کنید.'));
+    return true;
+  }
+  await insertTransaction({
+    userId,
+    username: from.username || null,
+    kind: 'charge',
+    amount,
+    status: 'pending',
+    receiptFileId: photo.file_id,
+    receiptChatId: RECEIPTS_GROUP_ID,
+    receiptMessageId: mid,
+  });
+  try {
+    await api.editMessageReplyMarkup({
+      chat_id: RECEIPTS_GROUP_ID,
+      message_id: mid,
+      reply_markup: receiptKeyboard(mid),
+    });
+  } catch {
+    // Buttons missing: the owner can still decide with /rx <id> ok|no.
+  }
+  await deleteSetting(`pending_charge_receipt:${userId}`);
+  await deleteMessageBestEffort(chatId, message.message_id);
+  await showPrivate(chatId, userId, receiptSentView());
+  return true;
+}
+
+// --- Private chat: owner intakes (user search, broadcast, notify). ---
+async function handlePendingUserSearch(chatId, messageId, ownerId, text) {
+  if (!(await getSetting(`pending_usersearch:${ownerId}`))) return false;
+  const query = text.trim();
+  await deleteSetting(`pending_usersearch:${ownerId}`);
+  if (!query) {
+    await showPrivate(chatId, ownerId, userSearchPromptView('متن جستجو خالی است.'));
+    await deleteMessageBestEffort(chatId, messageId);
+    return true;
+  }
+  await setSetting(`user_search_query:${ownerId}`, query);
+  const results = await searchStatsUsers(query);
+  await showPrivate(chatId, ownerId, userSearchResultsView(results, 0, query));
+  await deleteMessageBestEffort(chatId, messageId);
+  return true;
+}
+
+async function handlePendingBroadcast(chatId, messageId, ownerId, text) {
+  if (!(await getSetting(`pending_broadcast:${ownerId}`))) return false;
+  const body = text.trim();
+  if (!body) {
+    await showPrivate(chatId, ownerId, notifyPromptView('متن اطلاع‌رسانی خالی است.'));
+    await deleteMessageBestEffort(chatId, messageId);
+    return true;
+  }
+  await setSetting(`pending_broadcast_text:${ownerId}`, body);
+  const users = await getStatsUsers();
+  await showPrivate(chatId, ownerId, notifyConfirmView(users.length, body));
+  await deleteMessageBestEffort(chatId, messageId);
+  return true;
+}
+
+async function handlePendingNotifyUser(chatId, messageId, ownerId, text) {
+  const raw = await getSetting(`pending_notify_user:${ownerId}`);
+  if (!raw) return false;
+  let pending;
+  try {
+    pending = JSON.parse(raw);
+  } catch {
+    await deleteSetting(`pending_notify_user:${ownerId}`);
+    return false;
+  }
+  const body = text.trim();
+  await deleteSetting(`pending_notify_user:${ownerId}`);
+  if (!body) {
+    await showPrivate(chatId, ownerId, errorView('متن پیام خالی است.'));
+    await deleteMessageBestEffort(chatId, messageId);
+    return true;
+  }
+  try {
+    await api.sendMessage({ chat_id: pending.userId, text: body });
+    await showPrivate(chatId, ownerId, { text: 'پیام ارسال شد ✅', reply_markup: undefined });
+  } catch {
+    await showPrivate(chatId, ownerId, errorView('ارسال پیام ممکن نشد — شاید کاربر بات را بلاک کرده است.'));
+  }
   await deleteMessageBestEffort(chatId, messageId);
   return true;
 }
@@ -523,11 +799,12 @@ export default async function (message, ctx) {
       if (text.startsWith('/')) {
         const handled = await handleDbGroupCommand(chatId, messageId, userId, text);
         if (handled !== false) return;
-        await sendScreen(chatId, errorView('این دستور را نمی‌شناسم. /help'));
+        await showDb(chatId, userId, dbErrorView('این دستور را نمی‌شناسم. /help'));
         return;
       }
       if (await handlePendingCategoryName(chatId, messageId, userId, text)) return;
       if (await handlePendingTitle(chatId, messageId, userId, text)) return;
+      if (await handlePendingPriceAmount(chatId, messageId, userId, text)) return;
       if (text) {
         // Plain text with no pending title: nothing to do with it.
         return;
@@ -536,11 +813,34 @@ export default async function (message, ctx) {
       return;
     }
 
+    // The receipts group is owner-only: only /id and /rx matter here.
+    if (isReceiptsGroup(chatId)) {
+      if (!isOwner(userId)) return;
+      await trackUser(from, null);
+      if (text.startsWith('/')) {
+        const handled = await handleReceiptsGroupCommand(chatId, messageId, userId, text);
+        if (handled !== false) return;
+        await api.sendMessage({
+          chat_id: chatId,
+          text: 'این دستور را نمی‌شناسم. /id یا /rx <شماره پیام> ok|no',
+        });
+        return;
+      }
+      return;
+    }
+
     // Any other group: the bot only works in private chat.
     if (chat.type && chat.type !== 'private') return;
 
     // Private chat.
     await trackUser(from, null);
+
+    // Receipt photo for a pending top-up (before anything else: a
+    // photo is not a command and not a file to download).
+    if (message.photo) {
+      if (await handleReceiptPhoto(chatId, message, userId, from)) return;
+      return;
+    }
 
     // Shared contact (the optional phone on download): save the phone
     // and deliver the pending file. Delivery never waits for a phone.
@@ -563,80 +863,104 @@ export default async function (message, ctx) {
     }
     if (text.startsWith('/')) {
       await clearUserPending(userId);
+      await deleteMessageBestEffort(chatId, messageId);
       const parts = text.split(/\s+/);
       const command = parts[0].split('@')[0];
       if (command === '/start') {
         if (!(await ensureMember(chatId, userId))) return;
         const all = await listFiles();
-        await sendScreen(chatId, mainMenuView(isOwner(userId), all.length));
+        await showPrivate(chatId, userId, mainMenuView(isOwner(userId), all.length, await getUserBalance(userId)));
         return;
       }
       if (command === '/projects') {
         if (!(await ensureMember(chatId, userId))) return;
-        const placeholder = await sendScreen(chatId, { text: 'در حال گرفتن پروژه‌ها…' });
+        await showPrivate(chatId, userId, { text: 'در حال گرفتن پروژه‌ها…' });
         const res = await getProjects(false);
-        await replaceScreen(chatId, placeholder, projectsView(res.repos, res.cachedAt, res.liveFailed));
+        await showPrivate(chatId, userId, projectsView(res.repos, res.cachedAt, res.liveFailed));
         return;
       }
       if (command === '/socials') {
         if (!(await ensureMember(chatId, userId))) return;
-        await sendScreen(chatId, socialsView(SOCIALS));
+        await showPrivate(chatId, userId, socialsView(SOCIALS));
         return;
       }
       if (command === '/files') {
         if (!(await ensureMember(chatId, userId))) return;
         const all = await listFiles();
-        await sendScreen(chatId, categoriesView(await listCategories(), all.length));
+        await showPrivate(chatId, userId, categoriesView(await listCategories(), all.length));
         return;
       }
       if (command === '/search') {
         if (!(await ensureMember(chatId, userId))) return;
-        const sent = await sendScreen(chatId, searchPromptView());
-        await setSetting(`pending_search:${userId}`, `${chatId}:${sent}`);
+        await showPrivate(chatId, userId, searchPromptView());
+        await setSetting(`pending_search:${userId}`, '1');
         return;
       }
       if (command === '/get') {
         if (!(await ensureMember(chatId, userId))) return;
         const id = parseFileId(parts.slice(1).join(' '));
         if (!id) {
-          await sendScreen(chatId, errorView('شناسه فایل را بفرستید. مثال: /get F001'));
+          await showPrivate(chatId, userId, errorView('شناسه فایل را بفرستید. مثال: /get F001'));
           return;
         }
-        await showFile(chatId, id, null);
+        await showFile(chatId, userId, id, null);
+        return;
+      }
+      if (command === '/wallet') {
+        if (!(await ensureMember(chatId, userId))) return;
+        await showPrivate(
+          chatId,
+          userId,
+          walletView(await getUserBalance(userId), await listUserTransactions(userId)),
+        );
         return;
       }
       if (command === '/stats') {
         if (!isOwner(userId)) {
-          await sendScreen(chatId, errorView('این بخش فقط برای صاحب بات است.'));
+          await showPrivate(chatId, userId, errorView('این بخش فقط برای صاحب بات است.'));
           return;
         }
-        await showStats(chatId);
+        await showStats(chatId, userId);
         return;
       }
       if (command === '/id') {
-        await sendScreen(chatId, { text: `آیدی این چت: ${chatId}\nآیدی شما: ${userId}` });
+        await showPrivate(chatId, userId, { text: `آیدی این چت: ${chatId}\nآیدی شما: ${userId}` });
         return;
       }
       if (command === '/help') {
-        await sendScreen(chatId, { text: HELP_TEXT, reply_markup: undefined });
+        await showPrivate(chatId, userId, { text: HELP_TEXT, reply_markup: undefined });
         return;
       }
-      await sendScreen(chatId, errorView('این دستور را نمی‌شناسم. /help'));
+      await showPrivate(chatId, userId, errorView('این دستور را نمی‌شناسم. /help'));
       return;
     }
     if (await handlePendingSearch(chatId, messageId, userId, text)) return;
+    if (await handlePendingChargeAmount(chatId, messageId, userId, text)) return;
+    if (await handlePendingUserSearch(chatId, messageId, userId, text)) return;
+    if (await handlePendingBroadcast(chatId, messageId, userId, text)) return;
+    if (await handlePendingNotifyUser(chatId, messageId, userId, text)) return;
     // A bare id (F001) opens that file.
     const bare = normalizeDigits(text);
     if (/^F\d{1,6}$/i.test(bare)) {
       if (!(await ensureMember(chatId, userId))) return;
       const id = parseFileId(text);
-      await showFile(chatId, id, null);
+      await showFile(chatId, userId, id, null);
+      await deleteMessageBestEffort(chatId, messageId);
       return;
     }
-    await sendScreen(chatId, mainMenuView(isOwner(userId), (await listFiles()).length));
+    await showPrivate(
+      chatId,
+      userId,
+      mainMenuView(isOwner(userId), (await listFiles()).length, await getUserBalance(userId)),
+    );
+    await deleteMessageBestEffort(chatId, messageId);
   } catch (err) {
     try {
-      await sendScreen(chatId, errorView('خطایی رخ داد: ' + (err?.message || 'نامشخص')));
+      if (isDbGroup(chatId)) {
+        await showDb(chatId, userId, dbErrorView('خطایی رخ داد: ' + (err?.message || 'نامشخص')));
+      } else if (!isReceiptsGroup(chatId)) {
+        await showPrivate(chatId, userId, errorView('خطایی رخ داد: ' + (err?.message || 'نامشخص')));
+      }
     } catch {
       // The error reply itself failed; nothing more to do.
     }

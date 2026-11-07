@@ -18,6 +18,56 @@ export function paginate(items, page, perPage) {
   };
 }
 
+// Format a Toman amount: 12000 -> '۱۲٬۰۰۰ تومان'. 0 -> '۰ تومان'.
+export function formatToman(amount) {
+  const n = Number(amount) || 0;
+  return `${new Intl.NumberFormat('fa-IR').format(n)} تومان`;
+}
+
+// Parse a Toman amount from user text: Persian/Arabic digits, commas,
+// spaces and a «تومان» suffix are tolerated. Returns the integer or
+// null when invalid. allowZero permits 0 (a free price); otherwise
+// the amount must be above 0. Amounts above 1,000,000,000 are
+// rejected.
+export function parseAmount(text, allowZero = false) {
+  const cleaned = normalizeDigits(String(text ?? '')).replace(/[^\d]/g, '');
+  if (!cleaned) return null;
+  const n = Number(cleaned);
+  if (!Number.isFinite(n) || !Number.isInteger(n)) return null;
+  if (n < 0 || n > 1000000000) return null;
+  if (n === 0 && !allowZero) return null;
+  return n;
+}
+
+// A file is premium when it has a price above zero (Toman).
+export function isPremiumFile(file) {
+  return (Number(file?.price) || 0) > 0;
+}
+
+// True when the wallet balance covers the price.
+export function canAfford(balance, price) {
+  return (Number(balance) || 0) >= (Number(price) || 0);
+}
+
+// Search users by name, username or id. `users` rows carry
+// { user_id, username, first_name, last_name }. Empty query matches
+// nothing; matching is a case-insensitive substring.
+export function searchUsers(userRows, query) {
+  const q = String(query ?? '').trim().toLowerCase();
+  if (!q) return [];
+  const list = Array.isArray(userRows) ? userRows : [];
+  return list.filter((u) => {
+    const hay = [
+      String(u.user_id ?? ''),
+      u.username || '',
+      [u.first_name, u.last_name].filter(Boolean).join(' '),
+    ]
+      .join(' ')
+      .toLowerCase();
+    return hay.includes(q);
+  });
+}
+
 // Human-readable byte size, Persian units.
 export function formatBytes(size) {
   if (size === null || size === undefined || size === '') return '—';
@@ -245,6 +295,9 @@ export function buildUserRow(from, existing, nowMs, isMember) {
     // The phone is only ever set from a shared contact (see
     // setUserPhone); an interaction never clears it.
     phone: base.phone ?? null,
+    // The wallet balance is only ever changed by wallet operations
+    // (top-up / purchase); an interaction never touches it.
+    balance: base.balance ?? 0,
     first_seen: base.first_seen ?? now,
     last_seen: now,
     is_member:

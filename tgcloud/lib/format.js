@@ -1,8 +1,8 @@
 // Pure formatting helpers shared by both handlers. No 'sdk' import.
 
-import { formatBytes } from './pure.js';
+import { formatBytes, formatToman } from './pure.js';
 
-export { formatBytes };
+export { formatBytes, formatToman };
 
 export function truncate(text, max) {
   const s = String(text ?? '');
@@ -28,12 +28,15 @@ const KIND_FA = {
 };
 
 // One line of file info: "F001 — عنوان (v2، ۳ پارت، ۱۲٫۴ مگابایت)".
+// Premium files carry their price tag: "💰 ۵۰٬۰۰۰ تومان".
 export function fileLine(file) {
   const parts =
     (file.parts_count || 1) > 1 ? `، ${file.parts_count} پارت` : '';
   const size = file.size_total ? `، ${formatBytes(file.size_total)}` : '';
   const ver = file.version ? ` v${file.version}` : '';
-  return `${file.id} — ${truncate(file.title || '(بدون عنوان)', 45)}${ver}${parts}${size}`;
+  const price =
+    (Number(file.price) || 0) > 0 ? `، 💰 ${formatToman(file.price)}` : '';
+  return `${file.id} — ${truncate(file.title || '(بدون عنوان)', 45)}${ver}${parts}${size}${price}`;
 }
 
 // Full file view text. Shows the title (the owner's label) AND the
@@ -50,6 +53,11 @@ export function formatFile(file, parts, versions, downloadCount) {
     for (const [i, n] of names.entries()) lines.push(`  ${i + 1}. ${n}`);
   }
   lines.push(`دسته: ${file.category || 'سایر'}`);
+  lines.push(
+    (Number(file.price) || 0) > 0
+      ? `قیمت: ${formatToman(file.price)} (پرمیوم)`
+      : 'قیمت: رایگان',
+  );
   lines.push(`نسخه: v${file.version || 1} (از ${versions.length} نسخه)`);
   lines.push(`نوع: ${KIND_FA[file.kind] || file.kind || '—'}`);
   if (file.size_total) lines.push(`حجم: ${formatBytes(file.size_total)}`);
