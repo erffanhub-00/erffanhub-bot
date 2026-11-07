@@ -4,20 +4,20 @@
 
 // Numeric Telegram user id of the bot owner (Erfan). While it is 0,
 // isOwner() refuses everyone.
-export const OWNER_TELEGRAM_ID = 0;
+export const OWNER_TELEGRAM_ID = 7458260031;
 
 // Channel and public group the bot is connected to (force-join).
 // 0 means "not configured yet" — that check is skipped until set.
-export const CHANNEL_ID = 0;
-export const GROUP_ID = 0;
+export const CHANNEL_ID = -1004321703579;
+export const GROUP_ID = -1003787683379;
 
 // Private database group (only the owner + the bot). Files sent here
 // become library files. 0 means "not configured yet".
-export const DB_GROUP_ID = 0;
+export const DB_GROUP_ID = -1003792206156;
 
 // Public join links shown on the force-join screen.
-export const CHANNEL_URL = '';
-export const GROUP_URL = '';
+export const CHANNEL_URL = 'https://t.me/erffan_hub';
+export const GROUP_URL = 'https://t.me/erffanhub';
 
 // GitHub username whose public repos are shown on /projects.
 export const GITHUB_USER = 'erffanhub-00';
