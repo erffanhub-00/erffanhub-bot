@@ -1,6 +1,6 @@
 import { table, integer, text, sql } from 'sdk/db';
 
-// ErffanHub Files v1 database. No foreign keys: the runtime runs with
+// ErffanHub Files v2.1 database. No foreign keys: the runtime runs with
 // PRAGMA foreign_keys off, so integrity is the application's job.
 // Timestamps are epoch milliseconds (Date.now()) unless noted.
 // User data: everything stored about a user comes from what Telegram
@@ -119,4 +119,20 @@ export const github_cache = table('github_cache', {
   id: integer('id').primaryKey(),
   body: text('body'),
   fetched_at: integer('fetched_at'),
+});
+
+// Messages that delete themselves: delivered files (60s) and one-off
+// notices (20s). Rows are removed after the delete is attempted,
+// whether it worked or not — a message deleted by its reader, or one
+// Telegram refuses, must not be retried forever. The table is only
+// swept when an update arrives (there is no timer on Serverless),
+// so a message disappears on the next use of the bot at the earliest.
+export const expiring_messages = table('expiring_messages', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  chat_id: integer('chat_id'),
+  message_id: integer('message_id'),
+  // Epoch milliseconds when the message may be deleted.
+  delete_at: integer('delete_at'),
+  // 'file' (a delivered file part) or 'notice' (a one-off message).
+  kind: text('kind'),
 });

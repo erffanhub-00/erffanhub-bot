@@ -4,7 +4,7 @@
 
 import { db } from 'sdk';
 import { eq } from 'sdk/db';
-import { settings, users, downloads, files, file_parts, file_versions, github_cache, wallet_transactions } from '../schema.js';
+import { settings, users, downloads, files, file_parts, file_versions, github_cache, wallet_transactions, expiring_messages } from '../schema.js';
 import { buildUserRow, nextFileId, groupCategories } from './pure.js';
 
 export async function getSetting(key) {
@@ -74,6 +74,36 @@ export async function setFilePrice(fileId, price) {
   return getFile(fileId);
 }
 
+// --- Self-deleting messages ---
+
+// Remember a message to delete after `deleteAfterSec` seconds.
+// `kind` is 'file' or 'notice'. Returns the row id (unused by
+// callers — rows are found again by their delete_at).
+export async function recordExpiringMessage(chatId, messageId, deleteAfterSec, kind) {
+  if (!chatId || !messageId) return null;
+  await db
+    .insert(expiring_messages)
+    .values({
+      chat_id: Number(chatId),
+      message_id: Number(messageId),
+      delete_at: Date.now() + Math.max(1, Number(deleteAfterSec) || 0) * 1000,
+      kind: kind || 'notice',
+    })
+    .run();
+  return null;
+}
+
+export async function listExpiringMessages() {
+  const rows = await db.select().from(expiring_messages).all();
+  return rows.sort((a, b) => (a.delete_at || 0) - (b.delete_at || 0));
+}
+
+export async function deleteExpiringMessages(ids) {
+  for (const id of Array.isArray(ids) ? ids : []) {
+    await db.delete(expiring_messages).where(eq(expiring_messages.id, Number(id))).run();
+  }
+}
+
 // --- Wallet: balances and the transaction ledger ---
 
 export async function getUserBalance(userId) {
@@ -87,6 +117,20 @@ export async function adjustUserBalance(userId, delta) {
   const user = await getUser(userId);
   if (!user) return 0;
   const next = Math.max(0, (Number(user.balance) || 0) + (Number(delta) || 0));
+  await db
+    .update(users)
+    .set({ balance: next })
+    .where(eq(users.user_id, Number(userId)))
+    .run();
+  return next;
+}
+
+// Set a user's balance outright (owner manual fix). Clamped at zero.
+// Returns the new balance.
+export async function setUserBalance(userId, balance) {
+  const user = await getUser(userId);
+  if (!user) return 0;
+  const next = Math.max(0, Number(balance) || 0);
   await db
     .update(users)
     .set({ balance: next })
@@ -415,4 +459,57 @@ export async function setGithubCache(body) {
   } else {
     await db.insert(github_cache).values({ id: 1, body, fetched_at: Date.now() }).run();
   }
+}
+
+// --- Database management (owner only) ---
+
+// Delete every download-history row. Files, users, balances and the
+// money ledger are untouched.
+export async function clearDownloads() {
+  const rows = await db.select().from(downloads).all();
+  for (const r of rows) {
+    await db.delete(downloads).where(eq(downloads.id, Number(r.id))).run();
+  }
+  return rows.length;
+}
+
+// Drop the cached GitHub response so /projects refetches it live.
+export async function clearGithubCache() {
+  await db.delete(github_cache).where(eq(github_cache.id, 1)).run();
+}
+
+// Row counts for every table, for the owner's database screen.
+export async function getDbCounts() {
+  const count = async (t) => (await db.select().from(t).all()).length;
+  return {
+    settings: await count(settings),
+    files: await count(files),
+    file_parts: await count(file_parts),
+    file_versions: await count(file_versions),
+    downloads: await count(downloads),
+    users: await count(users),
+    github_cache: await count(github_cache),
+    wallet_transactions: await count(wallet_transactions),
+    expiring_messages: await count(expiring_messages),
+  };
+}
+
+// Full database dump for the owner's backup: every table, newest
+// first where it has an order. Nothing is filtered — this is the
+// owner's own data.
+export async function exportDatabase() {
+  return {
+    exported_at: Date.now(),
+    tables: {
+      settings: await db.select().from(settings).all(),
+      files: await listFiles(),
+      file_parts: await db.select().from(file_parts).all(),
+      file_versions: await db.select().from(file_versions).all(),
+      downloads: await listDownloads(),
+      users: await listUsers(),
+      github_cache: await db.select().from(github_cache).all(),
+      wallet_transactions: await listTransactions(),
+      expiring_messages: await listExpiringMessages(),
+    },
+  };
 }

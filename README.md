@@ -1,4 +1,4 @@
-# ErffanHub Files — v2.0.0
+# ErffanHub Files — v2.1.0
 
 A public Telegram bot on **Telegram Serverless** (no server, no
 Cloudflare Worker, no Mini App): a showcase + file library + wallet
@@ -56,9 +56,23 @@ for Erfan.
 - **Anti-clutter:** every screen is shown by deleting the previous
   screen message and sending a fresh one at the bottom of the chat,
   so the active screen is always the last message. The user's own
-  command/text messages are deleted after handling. The only new
-  messages are the delivered files themselves. Every screen ends
+  command/text messages are deleted after handling. Delivered files
+  delete themselves 60 seconds after delivery (the caption says so)
+  and one-off notices (wallet charged, receipt rejected, `/id`
+  replies) after 20 seconds. Telegram Serverless has no timer, so
+  expiry is swept on every incoming update — in active use a file is
+  gone within a minute of its expiry. Every screen ends
   with a generic «◀ بازگشت» button and «🏠 منوی اصلی».
+- **Support:** every user has «💬 پیام به پشتیبانی» in the main menu
+  (and `/support`). Their message (text, photo or file) is forwarded
+  to the owner, who answers from the «✏️ پاسخ» button; the reply is
+  forwarded back to the user.
+- **Owner admin:** «📣 اطلاع‌رسانی» in the main menu (audience:
+  everyone, one file's downloaders, or one user); on a user profile,
+  «💰 تغییر موجودی» sets the balance by hand (recorded in the ledger
+  as a manual adjustment); «🗄️ مدیریت دیتابیس» in `/stats` shows row
+  counts for all tables, downloads a full JSON backup, and clears
+  download history / the GitHub cache.
 
 ## Setup
 
@@ -84,7 +98,8 @@ for Erfan.
    npx tgcloud push
    npx tgcloud migrate      # creates settings, files, file_parts,
                             # file_versions, downloads, users, github_cache,
-                            # wallet_transactions (+ price/balance columns)
+                            # wallet_transactions, expiring_messages
+                            # (+ price/balance columns)
    ```
 5. **Try it:** `/start` in the bot. In the DB group, send a file and
    follow the bot's prompts.
@@ -98,8 +113,9 @@ for Erfan.
 - `/get F001` — open a file by id (bare `F001` also works)
 - `/search` — search files by name (title, description, category, file name)
 - `/wallet` — wallet balance, top-up and my transactions
-- `/stats` — owner-only stats (files + users + wallet + notify)
-- `/id` — this chat's id and your Telegram id
+- `/support` — message the owner (support)
+- `/stats` — owner-only stats (files + users + wallet + notify + database)
+- `/id` — this chat's id and your Telegram id (the reply deletes itself after 20 seconds)
 - `/help` — help
 
 DB group (owner only):

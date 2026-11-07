@@ -1,11 +1,13 @@
-// Callback handler (v2). Every button deletes the tapped screen
+// Callback handler (v2.1). Every button deletes the tapped screen
 // message and sends a fresh one at the bottom of the chat — the only
-// new messages are the delivered files (and broadcast/notify sends).
-// User tracking runs on every interaction. Stats, receipts and
-// DB-group actions are owner-only; everything else re-checks
-// force-join membership.
+// new messages are the delivered files (which delete themselves after
+// 60s), the owner's support replies and the backup file. Expired
+// self-deleting messages are swept on every update (see
+// lib/library.js runCleanup). User tracking runs on every
+// interaction. Stats, receipts and DB-group actions are owner-only;
+// everything else re-checks force-join membership.
 
-import { api } from 'sdk';
+import { api, InputFile } from 'sdk';
 import { isOwner } from '../lib/auth.js';
 import { SOCIALS, CARD_NUMBER } from '../lib/config.js';
 import {
@@ -25,6 +27,10 @@ import {
   listTransactions,
   getTransactionByReceiptMessage,
   finalizeIngest,
+  getDbCounts,
+  exportDatabase,
+  clearDownloads,
+  clearGithubCache,
 } from '../lib/store.js';
 import { needsPhonePrompt, categoryOptions, isPremiumFile, canAfford } from '../lib/pure.js';
 import {
@@ -43,7 +49,11 @@ import {
   purchaseFile,
   settleReceipt,
   receiptApprovedText,
+  runCleanup,
+  sendNotifyToUsers,
+  getFileDownloaders,
 } from '../lib/library.js';
+import { confirmKeyboard } from '../lib/keyboards.js';
 import { getProjects } from '../lib/github.js';
 import {
   mainMenuView,
@@ -74,7 +84,12 @@ import {
   userSearchResultsView,
   notifyPromptView,
   notifyConfirmView,
+  notifyAudienceView,
+  notifyFilePickerView,
   notifyUserPromptView,
+  supportPromptView,
+  balancePromptView,
+  dbView,
   promptTitleView,
   priceAmountPromptView,
   titleSavedView,
@@ -160,6 +175,12 @@ export default async function (query, ctx) {
   let answered = false;
   try {
     await trackUser(from, null);
+    // Sweep self-deleting messages whose time has come.
+    try {
+      await runCleanup();
+    } catch {
+      // Cleanup never breaks handling.
+    }
     // m:check and fl:dl answer with their own toast text later, so the
     // generic answer is skipped for them (a query can only be
     // answered once).
@@ -448,6 +469,37 @@ export default async function (query, ctx) {
       return;
     }
 
+    // --- Support: the user writes one message for the owner. ---
+    if (action === 'm:support') {
+      await setSetting(`pending_support:${userId}`, '1');
+      await show(supportPromptView());
+      return;
+    }
+    if (action === 'sp:cx') {
+      await deleteSetting(`pending_support:${userId}`);
+      const all = await listFiles();
+      await show(mainMenuView(isOwner(userId), all.length, await getUserBalance(userId)));
+      return;
+    }
+    // Owner taps "reply" on a support message.
+    if (action === 'sp:rep') {
+      if (!isOwner(userId)) {
+        await showError('این بخش فقط برای صاحب بات است.');
+        return;
+      }
+      const target = await getUser(arg1);
+      if (!target) {
+        await showError('کاربر پیدا نشد.');
+        return;
+      }
+      await setSetting(
+        `pending_support_reply:${userId}`,
+        JSON.stringify({ userId: target.user_id }),
+      );
+      await show(notifyUserPromptView(target));
+      return;
+    }
+
     // --- Wallet ---
     if (action === 'w:home') {
       await show(walletView(await getUserBalance(userId), await listUserTransactions(userId)));
@@ -551,7 +603,13 @@ export default async function (query, ctx) {
     if (action === 'st:usx') {
       await deleteSetting(`pending_usersearch:${userId}`);
       await deleteSetting(`user_search_query:${userId}`);
-      await show(statsView(await getStatsData()));
+      const ret = (await getSetting(`pending_notify_return:${userId}`)) || 'stats';
+      await deleteSetting(`pending_notify_return:${userId}`);
+      if (ret === 'menu') {
+        await show(notifyAudienceView());
+      } else {
+        await show(statsView(await getStatsData()));
+      }
       return;
     }
     if (action === 'st:ures') {
@@ -592,13 +650,22 @@ export default async function (query, ctx) {
         return;
       }
       await setSetting(`pending_broadcast:${userId}`, '1');
-      await show(notifyPromptView());
+      await setSetting(`pending_notify_return:${userId}`, 'stats');
+      await deleteSetting(`pending_notify_file:${userId}`);
+      await show(notifyPromptView('', 'همه کاربران'));
       return;
     }
     if (action === 'st:nfx') {
       await deleteSetting(`pending_broadcast:${userId}`);
       await deleteSetting(`pending_broadcast_text:${userId}`);
-      await show(statsView(await getStatsData()));
+      await deleteSetting(`pending_notify_file:${userId}`);
+      const ret = (await getSetting(`pending_notify_return:${userId}`)) || 'stats';
+      await deleteSetting(`pending_notify_return:${userId}`);
+      if (ret === 'menu') {
+        await show(notifyAudienceView());
+      } else {
+        await show(statsView(await getStatsData()));
+      }
       return;
     }
     if (action === 'st:nfy') {
@@ -607,26 +674,176 @@ export default async function (query, ctx) {
         return;
       }
       const text = (await getSetting(`pending_broadcast_text:${userId}`)) || '';
+      const fileId = await getSetting(`pending_notify_file:${userId}`);
+      const ret = (await getSetting(`pending_notify_return:${userId}`)) || 'stats';
       await deleteSetting(`pending_broadcast:${userId}`);
       await deleteSetting(`pending_broadcast_text:${userId}`);
+      await deleteSetting(`pending_notify_file:${userId}`);
+      await deleteSetting(`pending_notify_return:${userId}`);
       if (arg1 !== 'yes' || !text) {
-        await show(statsView(await getStatsData()));
+        if (ret === 'menu') {
+          await show(notifyAudienceView());
+        } else {
+          await show(statsView(await getStatsData()));
+        }
         return;
       }
-      const allUsers = await listUsers();
-      let ok = 0;
-      let fail = 0;
-      for (const u of allUsers) {
-        try {
-          await api.sendMessage({ chat_id: u.user_id, text });
-          ok += 1;
-        } catch {
-          fail += 1;
-        }
+      const targets = fileId
+        ? await getFileDownloaders(fileId)
+        : (await getStatsUsers()).map((u) => u.user_id);
+      const res = await sendNotifyToUsers(targets, text);
+      const audience = fileId ? `کاربران فایل ${fileId}` : 'همه کاربران';
+      await show({
+        text: `اطلاع‌رسانی به ${audience} ارسال شد.\nبه ${res.ok} کاربر رسید، ${res.fail} کاربر نشد.`,
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '◀ بازگشت', callback_data: ret === 'menu' ? 'm:notify' : 'm:stats' }],
+            [{ text: '🏠 منوی اصلی', callback_data: 'm:home' }],
+          ],
+        },
+      });
+      return;
+    }
+
+    // --- Notify (owner, from the main menu): pick the audience first. ---
+    if (action === 'm:notify') {
+      if (!isOwner(userId)) {
+        await showError('این بخش فقط برای صاحب بات است.');
+        return;
+      }
+      await show(notifyAudienceView());
+      return;
+    }
+    if (action === 'nf:all') {
+      if (!isOwner(userId)) {
+        await showError('این بخش فقط برای صاحب بات است.');
+        return;
+      }
+      await setSetting(`pending_broadcast:${userId}`, '1');
+      await setSetting(`pending_notify_return:${userId}`, 'menu');
+      await deleteSetting(`pending_notify_file:${userId}`);
+      await show(notifyPromptView('', 'همه کاربران'));
+      return;
+    }
+    if (action === 'nf:file') {
+      if (!isOwner(userId)) {
+        await showError('این بخش فقط برای صاحب بات است.');
+        return;
+      }
+      await show(notifyFilePickerView(await listFiles(), 0));
+      return;
+    }
+    if (action === 'nf:fpk') {
+      if (!isOwner(userId)) {
+        await showError('این بخش فقط برای صاحب بات است.');
+        return;
+      }
+      await show(notifyFilePickerView(await listFiles(), num(arg1)));
+      return;
+    }
+    if (action === 'nf:fpick') {
+      if (!isOwner(userId)) {
+        await showError('این بخش فقط برای صاحب بات است.');
+        return;
+      }
+      const file = await getFile(arg1);
+      if (!file) {
+        await show(notifyFilePickerView(await listFiles(), 0));
+        return;
+      }
+      await setSetting(`pending_notify_file:${userId}`, file.id);
+      await setSetting(`pending_broadcast:${userId}`, '1');
+      await setSetting(`pending_notify_return:${userId}`, 'menu');
+      await show(notifyPromptView('', `کاربران فایل ${file.id}`));
+      return;
+    }
+    if (action === 'nf:user') {
+      if (!isOwner(userId)) {
+        await showError('این بخش فقط برای صاحب بات است.');
+        return;
+      }
+      await setSetting(`pending_usersearch:${userId}`, '1');
+      await setSetting(`pending_notify_return:${userId}`, 'menu');
+      await show(userSearchPromptView());
+      return;
+    }
+
+    // --- Owner admin: manual balance fix + database management. ---
+    if (action === 'st:bal') {
+      if (!isOwner(userId)) {
+        await showError('این بخش فقط برای صاحب بات است.');
+        return;
+      }
+      const target = await getUser(arg1);
+      if (!target) {
+        await showError('کاربر پیدا نشد.');
+        return;
+      }
+      await setSetting(
+        `pending_balance:${userId}`,
+        JSON.stringify({ userId: target.user_id }),
+      );
+      await show(balancePromptView(target));
+      return;
+    }
+    if (action === 'st:db') {
+      if (!isOwner(userId)) {
+        await showError('این بخش فقط برای صاحب بات است.');
+        return;
+      }
+      await show(dbView(await getDbCounts()));
+      return;
+    }
+    if (action === 'st:backup') {
+      if (!isOwner(userId)) {
+        await showError('این بخش فقط برای صاحب بات است.');
+        return;
+      }
+      try {
+        const dump = await exportDatabase();
+        const bytes = new TextEncoder().encode(JSON.stringify(dump, null, 2));
+        const stamp = new Date().toISOString().slice(0, 10);
+        await api.sendDocument({
+          chat_id: chatId,
+          document: new InputFile(bytes, `erffanhub-backup-${stamp}.json`, {
+            type: 'application/json',
+          }),
+          caption: 'پشتیبان دیتابیس — همه جدول‌ها.',
+        });
+      } catch {
+        await showError('ارسال پشتیبان ممکن نشد.');
+      }
+      return;
+    }
+    if (action === 'st:cleardl') {
+      if (!isOwner(userId)) {
+        await showError('این بخش فقط برای صاحب بات است.');
+        return;
+      }
+      if (arg1 === 'yes') {
+        await clearDownloads();
+        await show(dbView(await getDbCounts()));
+        return;
       }
       await show({
-        text: `اطلاع‌رسانی ارسال شد.\nبه ${ok} کاربر رسید، ${fail} کاربر نشد.`,
-        reply_markup: undefined,
+        text: 'تاریخچه دانلودها پاک شود؟\nفایل‌ها، کاربران و کیف پول دست نمی‌خورند — فقط اینکه چه کسی چه فایلی را دانلود کرده پاک می‌شود.',
+        reply_markup: confirmKeyboard('st:cleardl:yes', 'st:db'),
+      });
+      return;
+    }
+    if (action === 'st:clearcache') {
+      if (!isOwner(userId)) {
+        await showError('این بخش فقط برای صاحب بات است.');
+        return;
+      }
+      if (arg1 === 'yes') {
+        await clearGithubCache();
+        await show(dbView(await getDbCounts()));
+        return;
+      }
+      await show({
+        text: 'کش گیت‌هاب پاک شود؟\nدفعه بعد که پروژه‌ها را باز کنید، لیست دوباره از گیت‌هاب گرفته می‌شود.',
+        reply_markup: confirmKeyboard('st:clearcache:yes', 'st:db'),
       });
       return;
     }

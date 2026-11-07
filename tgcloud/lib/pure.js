@@ -1,6 +1,41 @@
 // Pure helpers with no 'sdk' import, so they can be tested under
 // plain Node.
 
+// How long a delivered file stays in the chat (seconds) and how
+// long a one-off notice stays (seconds). Telegram Serverless has no
+// timer, so expiry is enforced lazily: every incoming update deletes
+// the rows whose time has come.
+export const FILE_TTL_SEC = 60;
+export const NOTICE_TTL_SEC = 20;
+
+// Rows of the expiring_messages table whose delete_at has passed.
+// `rows` carry { delete_at } in epoch milliseconds.
+export function expiredRows(rows, nowMs) {
+  const now = Number(nowMs) || 0;
+  return (Array.isArray(rows) ? rows : []).filter(
+    (r) => Number(r.delete_at) <= now,
+  );
+}
+
+// Unique user ids that downloaded a file (any version), newest
+// download first. `rows` are download rows { file_id, user_id,
+// downloaded_at }.
+export function fileDownloaders(rows, fileId) {
+  const seen = new Set();
+  const out = [];
+  const list = (Array.isArray(rows) ? rows : [])
+    .filter((r) => r.file_id === fileId && r.user_id)
+    .sort((a, b) => (Number(b.downloaded_at) || 0) - (Number(a.downloaded_at) || 0));
+  for (const r of list) {
+    const id = Number(r.user_id);
+    if (!seen.has(id)) {
+      seen.add(id);
+      out.push(id);
+    }
+  }
+  return out;
+}
+
 // Pagination over an in-memory list (1-based page numbers in the UI,
 // 0-based in code). Returns the slice for the page plus totals, with
 // the page clamped into range.

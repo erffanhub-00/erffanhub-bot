@@ -15,6 +15,11 @@ import {
   walletView,
   chargeView,
   userSearchResultsView,
+  notifyAudienceView,
+  notifyFilePickerView,
+  supportPromptView,
+  balancePromptView,
+  dbView,
 } from '../tgcloud/lib/views.js';
 
 test('owner gate: isOwner refuses everyone while the owner id is unset (0)', () => {
@@ -288,4 +293,112 @@ test('user search results list matches with paging and a back button', () => {
   assert.ok(buttons.some((b) => b.callback_data === 'st:u:123'));
   assert.ok(buttons.some((b) => b.callback_data === 'st:u:456'));
   assert.ok(buttons.some((b) => b.text === '◀ بازگشت'));
+});
+
+test('main menu shows the notify button only to the owner, and support to everyone', () => {
+  const ownerKb = mainMenu(true).inline_keyboard.flat();
+  const userKb = mainMenu(false).inline_keyboard.flat();
+  assert.ok(ownerKb.some((b) => b.callback_data === 'm:notify'));
+  assert.ok(!userKb.some((b) => b.callback_data === 'm:notify'));
+  assert.ok(ownerKb.some((b) => b.callback_data === 'm:support'));
+  assert.ok(userKb.some((b) => b.callback_data === 'm:support'));
+});
+
+test('notify audience view offers all, one file, and one user', () => {
+  const view = notifyAudienceView();
+  const buttons = view.reply_markup.inline_keyboard.flat();
+  assert.ok(buttons.some((b) => b.callback_data === 'nf:all'));
+  assert.ok(buttons.some((b) => b.callback_data === 'nf:file'));
+  assert.ok(buttons.some((b) => b.callback_data === 'nf:user'));
+  assert.ok(buttons.some((b) => b.callback_data === 'm:home'));
+  const noted = notifyAudienceView('پیام ارسال شد ✅');
+  assert.match(noted.text, /پیام ارسال شد/);
+});
+
+test('notify file picker lists files with pick buttons and pages', () => {
+  const items = Array.from({ length: 7 }, (_, i) => ({
+    id: 'F' + String(i + 1).padStart(3, '0'),
+    title: 'فایل ' + (i + 1),
+    version: 1,
+    parts_count: 1,
+  }));
+  const view = notifyFilePickerView(items, 1);
+  assert.match(view.text, /کاربران کدام فایل؟ \(صفحه 2 از 2\)/);
+  const buttons = view.reply_markup.inline_keyboard.flat();
+  assert.ok(buttons.some((b) => b.callback_data === 'nf:fpick:F006'));
+  assert.ok(buttons.some((b) => b.callback_data === 'nf:fpk:0'));
+  assert.ok(buttons.some((b) => b.callback_data === 'm:notify'));
+  const empty = notifyFilePickerView([], 0);
+  assert.match(empty.text, /هنوز فایلی نیست/);
+});
+
+test('support prompt asks for one message and cancels back to the menu', () => {
+  const view = supportPromptView();
+  assert.match(view.text, /پیامت به پشتیبانی را بفرست/);
+  const buttons = view.reply_markup.inline_keyboard.flat();
+  assert.ok(buttons.some((b) => b.callback_data === 'sp:cx'));
+  assert.ok(buttons.some((b) => b.callback_data === 'm:home'));
+});
+
+test('balance prompt shows the current balance and cancels to the user detail', () => {
+  const view = balancePromptView({ user_id: 123, username: 'ali', balance: 50000 });
+  assert.match(view.text, /موجودی @ali: ۵۰٬۰۰۰ تومان/);
+  assert.match(view.text, /موجودی جدید را به تومان بفرستید/);
+  const buttons = view.reply_markup.inline_keyboard.flat();
+  assert.ok(buttons.some((b) => b.callback_data === 'st:u:123'));
+});
+
+test('user detail has a balance-fix button', () => {
+  const view = statsUserView(
+    { user_id: 123, username: 'ali', first_name: 'Ali', phone: null, is_member: 1, first_seen: 1, last_seen: 2 },
+    [],
+  );
+  const buttons = view.reply_markup.inline_keyboard.flat();
+  assert.ok(buttons.some((b) => b.callback_data === 'st:bal:123'));
+  assert.ok(buttons.some((b) => b.callback_data === 'st:msg:123'));
+});
+
+test('database view lists table counts and the backup button', () => {
+  const view = dbView({
+    files: 3,
+    file_parts: 4,
+    file_versions: 3,
+    downloads: 9,
+    users: 12,
+    wallet_transactions: 5,
+    github_cache: 1,
+    expiring_messages: 2,
+  });
+  assert.match(view.text, /فایل‌ها: 3 مورد/);
+  assert.match(view.text, /دانلودها: 9 مورد/);
+  assert.match(view.text, /کاربران: 12 نفر/);
+  assert.match(view.text, /تراکنش‌ها: 5 مورد/);
+  const buttons = view.reply_markup.inline_keyboard.flat();
+  assert.ok(buttons.some((b) => b.callback_data === 'st:backup'));
+  assert.ok(buttons.some((b) => b.callback_data === 'st:cleardl'));
+  assert.ok(buttons.some((b) => b.callback_data === 'st:clearcache'));
+  assert.ok(buttons.some((b) => b.callback_data === 'm:stats'));
+});
+
+test('transaction line shows a manual adjustment as تغییر دستی', () => {
+  const view = walletView(0, [
+    { kind: 'adjust', amount: 20000, status: 'approved', created_at: Date.UTC(2026, 10, 7, 12, 0, 0) },
+    { kind: 'adjust', amount: -5000, status: 'approved', created_at: Date.UTC(2026, 10, 7, 12, 0, 0) },
+  ]);
+  assert.match(view.text, /➕ ۲۰٬۰۰۰ تومان — تغییر دستی/);
+  assert.match(view.text, /➖ ۵٬۰۰۰ تومان — تغییر دستی/);
+});
+
+test('stats view links to database management', () => {
+  const view = statsView({
+    filesTotal: 1,
+    partsTotal: 1,
+    sizeTotal: 10,
+    downloadsTotal: 0,
+    usersTotal: 1,
+    usersToday: 0,
+    usersWeek: 0,
+  });
+  const buttons = view.reply_markup.inline_keyboard.flat();
+  assert.ok(buttons.some((b) => b.callback_data === 'st:db'));
 });

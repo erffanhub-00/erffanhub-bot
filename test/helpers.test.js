@@ -22,6 +22,10 @@ import {
   aggregateDownloads,
   countNewUsers,
   parseGitHubRepos,
+  FILE_TTL_SEC,
+  NOTICE_TTL_SEC,
+  expiredRows,
+  fileDownloaders,
 } from '../tgcloud/lib/pure.js';
 
 test('formatToman renders Persian thousands with the تومان suffix', () => {
@@ -356,4 +360,36 @@ test('parseGitHubRepos drops forks, sorts newest first, keeps display fields', (
   assert.equal(repos[0].url, 'https://github.com/u/new');
   assert.equal(repos[0].description, null);
   assert.deepEqual(parseGitHubRepos(null), []);
+});
+
+test('expiry windows: files 60s, notices 20s', () => {
+  assert.equal(FILE_TTL_SEC, 60);
+  assert.equal(NOTICE_TTL_SEC, 20);
+});
+
+test('expiredRows keeps only rows whose delete_at has passed', () => {
+  const now = Date.UTC(2026, 10, 7, 12, 0, 0);
+  const rows = [
+    { id: 1, delete_at: now - 1000 },
+    { id: 2, delete_at: now },
+    { id: 3, delete_at: now + 1000 },
+    { id: 4, delete_at: null },
+  ];
+  assert.deepEqual(expiredRows(rows, now).map((r) => r.id), [1, 2, 4]);
+  assert.deepEqual(expiredRows([], now), []);
+  assert.deepEqual(expiredRows(null, now), []);
+});
+
+test('fileDownloaders returns unique downloaders of one file, newest first', () => {
+  const rows = [
+    { file_id: 'F001', user_id: 111, downloaded_at: 100 },
+    { file_id: 'F001', user_id: 222, downloaded_at: 300 },
+    { file_id: 'F001', user_id: 111, downloaded_at: 500 },
+    { file_id: 'F002', user_id: 333, downloaded_at: 400 },
+    { file_id: 'F001', user_id: null, downloaded_at: 600 },
+  ];
+  assert.deepEqual(fileDownloaders(rows, 'F001'), [111, 222]);
+  assert.deepEqual(fileDownloaders(rows, 'F002'), [333]);
+  assert.deepEqual(fileDownloaders(rows, 'F999'), []);
+  assert.deepEqual(fileDownloaders(null, 'F001'), []);
 });

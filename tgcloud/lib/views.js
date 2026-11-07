@@ -28,6 +28,9 @@ import {
   walletKeyboard,
   chargeKeyboard,
   notifyConfirmKeyboard,
+  notifyAudienceKeyboard,
+  notifyFileKeyboard,
+  dbKeyboard,
   confirmKeyboard,
   cancelInputKeyboard,
 } from './keyboards.js';
@@ -43,11 +46,13 @@ export const HELP_TEXT =
   '/get F001 — دیدن یک فایل با شناسه‌اش\n' +
   '/search — جستجو با نام فایل (عنوان، توضیح، دسته، نام فایل)\n' +
   '/wallet — کیف پول و شارژ\n' +
-  '/id — آیدی این چت و آیدی شما\n' +
+  '/support — پیام به پشتیبانی\n' +
+  '/id — آیدی این چت و آیدی شما (پیامش بعد از ۲۰ ثانیه پاک می‌شود)\n' +
   '/help — همین راهنما\n\n' +
   'برای استفاده از بات اول باید عضو کانال و گروه شوید.\n' +
   'فایل‌ها را با شناسه‌شان (مثل F001) یا از لیست فایل‌ها پیدا کنید.\n' +
-  'فایل‌های پرمیوم (💰) با کیف پول خریده می‌شوند: کیف پول را با کارت‌به‌کارت شارژ کنید.';
+  'فایل‌های پرمیوم (💰) با کیف پول خریده می‌شوند: کیف پول را با کارت‌به‌کارت شارژ کنید.\n' +
+  'فایل‌های دریافتی بعد از ۱ دقیقه از چت پاک می‌شوند — تا قبلش ذخیره‌شان کنید.';
 
 export function mainMenuView(owner, totalFiles, balance = 0) {
   const text =
@@ -271,14 +276,17 @@ export function premiumPayView(file, balance) {
 }
 
 // One transaction line: "➕ ۱۰۰٬۰۰۰ تومان — شارژ — تایید شده — ۱۴۰۵/۰۸/۱۶".
+// 'adjust' is the owner's manual balance fix.
 export function txLine(t) {
-  const sign = t.kind === 'purchase' ? '➖' : '➕';
-  const amount = formatToman(Math.abs(Number(t.amount) || 0));
-  const kind = t.kind === 'purchase' ? 'خرید' : 'شارژ';
+  const amount = Number(t.amount) || 0;
+  const sign = t.kind === 'purchase' || amount < 0 ? '➖' : '➕';
+  const amountText = formatToman(Math.abs(amount));
+  const kind =
+    t.kind === 'purchase' ? 'خرید' : t.kind === 'adjust' ? 'تغییر دستی' : 'شارژ';
   const status =
     t.status === 'approved' ? 'تایید شده' : t.status === 'rejected' ? 'رد شده' : 'در انتظار';
   const file = t.file_id ? ` — ${t.file_id}` : '';
-  return `${sign} ${amount} — ${kind}${file} — ${status} — ${formatTehran(t.created_at)}`;
+  return `${sign} ${amountText} — ${kind}${file} — ${status} — ${formatTehran(t.created_at)}`;
 }
 
 export function myTxView(items, page) {
@@ -457,12 +465,99 @@ export function userSearchResultsView(items, page, query) {
   };
 }
 
-export function notifyPromptView(note = '') {
+export function notifyPromptView(note = '', audience = 'همه کاربران') {
   const head = note ? note + '\n' : '';
   return {
-    text: head + 'متن اطلاع‌رسانی را بفرستید.\nبه همه کاربران بات ارسال می‌شود.',
+    text: head + `متن اطلاع‌رسانی را بفرستید.\nبه ${audience} ارسال می‌شود.`,
     reply_markup: cancelInputKeyboard('st:nfx'),
   };
+}
+
+// Notify audience picker (owner, from the main menu): everyone, one
+// file's downloaders, or one user. `note` is an optional result line
+// shown on top (e.g. after a message was sent).
+export function notifyAudienceView(note = '') {
+  const head = note ? note + '\n\n' : '';
+  return {
+    text:
+      head +
+      'اطلاع‌رسانی به چه کسی؟\n\n' +
+      '• همه کاربران — پیام به همه کسانی که بات را باز کرده‌اند\n' +
+      '• کاربران یک فایل — فقط کسانی که آن فایل را دانلود کرده‌اند\n' +
+      '• یک کاربر — اول کاربر را پیدا می‌کنید، بعد پیام را می‌فرستید',
+    reply_markup: notifyAudienceKeyboard(),
+  };
+}
+
+// File picker for the "users of one file" audience.
+export function notifyFilePickerView(items, page) {
+  const { pageItems, page: safePage, totalPages, total } = paginate(items, page, PAGE_SIZE);
+  if (total === 0) {
+    return {
+      text: 'هنوز فایلی نیست.',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '◀ بازگشت', callback_data: 'm:notify' }],
+          [{ text: '🏠 منوی اصلی', callback_data: 'm:home' }],
+        ],
+      },
+    };
+  }
+  const lines = pageItems.map((f) => fileLine(f));
+  const text =
+    `کاربران کدام فایل؟ (صفحه ${safePage + 1} از ${totalPages})\n\n` + lines.join('\n');
+  return {
+    text: truncate(text, 4000),
+    reply_markup: notifyFileKeyboard(pageItems, safePage, totalPages),
+  };
+}
+
+// Support: the user writes one message (text, photo or file) for the
+// owner. It is forwarded to the owner, who answers from the reply
+// button on it.
+export function supportPromptView(note = '') {
+  const head = note ? note + '\n' : '';
+  return {
+    text:
+      head +
+      'پیامت به پشتیبانی را بفرست — متن، عکس یا فایل.\nصاحب بات جوابت را همین‌جا می‌دهد.',
+    reply_markup: cancelInputKeyboard('sp:cx'),
+  };
+}
+
+// Owner manual balance fix: show the current balance, ask for the new
+// one. The change is written to the ledger as a manual adjustment.
+export function balancePromptView(user, note = '') {
+  const head = note ? note + '\n' : '';
+  const who = user.username ? '@' + user.username : `کاربر ${user.user_id}`;
+  return {
+    text:
+      head +
+      `موجودی ${who}: ${formatToman(user.balance || 0)}\n\n` +
+      'موجودی جدید را به تومان بفرستید. مثال: 100000\n(صفر یعنی خالی)',
+    reply_markup: cancelInputKeyboard(`st:u:${user.user_id}`),
+  };
+}
+
+// Database management (owner only): row counts per table, backup and
+// cleanup actions. Files, users, balances and the money ledger are
+// never wiped from here — files are deleted one by one (/del),
+// balances are fixed from the user screen.
+export function dbView(counts) {
+  const c = counts || {};
+  const lines = [
+    '🗄️ مدیریت دیتابیس',
+    '',
+    `فایل‌ها: ${c.files ?? '—'} مورد (${c.file_parts ?? '—'} پارت، ${c.file_versions ?? '—'} ورژن)`,
+    `دانلودها: ${c.downloads ?? '—'} مورد`,
+    `کاربران: ${c.users ?? '—'} نفر`,
+    `تراکنش‌ها: ${c.wallet_transactions ?? '—'} مورد`,
+    `کش گیت‌هاب: ${c.github_cache ?? '—'} ردیف`,
+    `پیام‌های در انتظار حذف: ${c.expiring_messages ?? '—'} مورد`,
+    '',
+    'پشتیبان (JSON) همه جدول‌ها را یک‌جا دانلود می‌کند.',
+  ];
+  return { text: lines.join('\n'), reply_markup: dbKeyboard() };
 }
 
 export function notifyConfirmView(count, text) {

@@ -7,15 +7,18 @@
 // - Any other group: ignored.
 // Navigation model: every screen is shown by deleting the previous
 // screen message and sending a fresh one at the bottom of the chat
-// (the stored screen id lives in settings). Delivered files are new
-// messages and stay; the user's own command/text messages are deleted
-// after handling (best-effort; Telegram forbids deleting messages
-// older than 48 hours). User tracking runs on every interaction.
-// The bot never asks a user for personal information.
+// (the stored screen id lives in settings). Delivered files delete
+// themselves 60 seconds after delivery and one-off notices after 20
+// seconds (see lib/library.js runCleanup — Serverless has no timer,
+// so expiry is swept on every incoming update). The user's own
+// command/text messages are deleted after handling (best-effort;
+// Telegram forbids deleting messages older than 48 hours). User
+// tracking runs on every interaction. The bot never asks a user for
+// personal information.
 
 import { api } from 'sdk';
 import { isOwner } from '../lib/auth.js';
-import { SOCIALS, RECEIPTS_GROUP_ID } from '../lib/config.js';
+import { SOCIALS, RECEIPTS_GROUP_ID, OWNER_TELEGRAM_ID } from '../lib/config.js';
 import {
   extractFileMeta,
   parseFileId,
@@ -40,9 +43,11 @@ import {
   listCategories,
   getUser,
   getUserBalance,
+  setUserBalance,
   listUserTransactions,
   insertTransaction,
   getTransactionByReceiptMessage,
+  getUserDownloads,
 } from '../lib/store.js';
 import {
   checkMembership,
@@ -61,9 +66,12 @@ import {
   settleReceipt,
   receiptCaptionText,
   receiptApprovedText,
+  runCleanup,
+  sendExpiring,
+  getFileDownloaders,
 } from '../lib/library.js';
 import { getProjects } from '../lib/github.js';
-import { receiptKeyboard } from '../lib/keyboards.js';
+import { receiptKeyboard, backToMenu, supportReplyKeyboard } from '../lib/keyboards.js';
 import {
   HELP_TEXT,
   mainMenuView,
@@ -87,6 +95,10 @@ import {
   userSearchResultsView,
   notifyPromptView,
   notifyConfirmView,
+  notifyAudienceView,
+  statsUserView,
+  supportPromptView,
+  balancePromptView,
   confirmDeleteView,
   promptTitleView,
   pricePromptView,
@@ -164,6 +176,11 @@ async function clearUserPending(userId) {
   await deleteSetting(`pending_broadcast:${userId}`);
   await deleteSetting(`pending_broadcast_text:${userId}`);
   await deleteSetting(`pending_notify_user:${userId}`);
+  await deleteSetting(`pending_notify_file:${userId}`);
+  await deleteSetting(`pending_notify_return:${userId}`);
+  await deleteSetting(`pending_support:${userId}`);
+  await deleteSetting(`pending_support_reply:${userId}`);
+  await deleteSetting(`pending_balance:${userId}`);
 }
 
 // --- Force-join gate (private chat). Returns true when the user may
@@ -520,7 +537,12 @@ async function handleDbGroupCommand(chatId, messageId, ownerId, text) {
     return;
   }
   if (command === '/id') {
-    await showDb(chatId, ownerId, { text: `آیدی این چت: ${chatId}\nآیدی شما: ${ownerId}` });
+    // One-off, never a screen: /id must not eat the menu, and the
+    // reply deletes itself after 20 seconds.
+    await sendExpiring(
+      chatId,
+      `آیدی این چت: ${chatId}\nآیدی شما: ${ownerId}\n(این پیام بعد از ۲۰ ثانیه پاک می‌شود.)`,
+    );
     return;
   }
   if (command === '/help') {
@@ -538,30 +560,27 @@ async function handleReceiptsGroupCommand(chatId, messageId, ownerId, text) {
   const parts = text.split(/\s+/);
   const command = parts[0].split('@')[0];
   if (command === '/id') {
-    await api.sendMessage({
-      chat_id: chatId,
-      text: `آیدی این چت: ${chatId}\nآیدی شما: ${ownerId}`,
-    });
+    await sendExpiring(
+      chatId,
+      `آیدی این چت: ${chatId}\nآیدی شما: ${ownerId}\n(این پیام بعد از ۲۰ ثانیه پاک می‌شود.)`,
+    );
     return true;
   }
   if (command === '/rx') {
     const mid = Number(parts[1] || 0);
     const decision = String(parts[2] || '').toLowerCase();
     if (!mid || (decision !== 'ok' && decision !== 'no')) {
-      await api.sendMessage({
-        chat_id: chatId,
-        text: 'مثال: /rx 123 ok — تایید رسید با آن شماره پیام، یا /rx 123 no برای رد.',
-      });
+      await sendExpiring(chatId, 'مثال: /rx 123 ok — تایید رسید با آن شماره پیام، یا /rx 123 no برای رد.');
       return true;
     }
     const tx = await getTransactionByReceiptMessage(mid);
     const res = await settleReceipt(tx, decision === 'ok');
     if (res.status === 'missing') {
-      await api.sendMessage({ chat_id: chatId, text: `رسیدی با شماره پیام ${mid} پیدا نشد.` });
+      await sendExpiring(chatId, `رسیدی با شماره پیام ${mid} پیدا نشد.`);
       return true;
     }
     if (res.status === 'already') {
-      await api.sendMessage({ chat_id: chatId, text: `رسید ${mid} قبلاً بررسی شده است.` });
+      await sendExpiring(chatId, `رسید ${mid} قبلاً بررسی شده است.`);
       return true;
     }
     if (res.status === 'approved') {
@@ -583,11 +602,11 @@ async function handleReceiptsGroupCommand(chatId, messageId, ownerId, text) {
       } catch {
         // Buttons stay; the receipt is already decided (idempotent).
       }
-      await api.sendMessage({ chat_id: chatId, text: `رسید ${mid} تایید شد.` });
+      await sendExpiring(chatId, `رسید ${mid} تایید شد.`);
       return true;
     }
     await deleteMessageBestEffort(chatId, mid);
-    await api.sendMessage({ chat_id: chatId, text: `رسید ${mid} رد شد و پیامش پاک شد.` });
+    await sendExpiring(chatId, `رسید ${mid} رد شد و پیامش پاک شد.`);
     return true;
   }
   return false;
@@ -751,8 +770,11 @@ async function handlePendingBroadcast(chatId, messageId, ownerId, text) {
     return true;
   }
   await setSetting(`pending_broadcast_text:${ownerId}`, body);
-  const users = await getStatsUsers();
-  await showPrivate(chatId, ownerId, notifyConfirmView(users.length, body));
+  const fileId = await getSetting(`pending_notify_file:${ownerId}`);
+  const count = fileId
+    ? (await getFileDownloaders(fileId)).length
+    : (await getStatsUsers()).length;
+  await showPrivate(chatId, ownerId, notifyConfirmView(count, body));
   await deleteMessageBestEffort(chatId, messageId);
   return true;
 }
@@ -776,10 +798,162 @@ async function handlePendingNotifyUser(chatId, messageId, ownerId, text) {
   }
   try {
     await api.sendMessage({ chat_id: pending.userId, text: body });
-    await showPrivate(chatId, ownerId, { text: 'پیام ارسال شد ✅', reply_markup: undefined });
+    const ret = await getSetting(`pending_notify_return:${ownerId}`);
+    await deleteSetting(`pending_notify_return:${ownerId}`);
+    if (ret === 'menu') {
+      await showPrivate(chatId, ownerId, notifyAudienceView('پیام ارسال شد ✅'));
+    } else {
+      await showPrivate(chatId, ownerId, { text: 'پیام ارسال شد ✅', reply_markup: backToMenu() });
+    }
   } catch {
     await showPrivate(chatId, ownerId, errorView('ارسال پیام ممکن نشد — شاید کاربر بات را بلاک کرده است.'));
   }
+  await deleteMessageBestEffort(chatId, messageId);
+  return true;
+}
+
+// --- Private chat: support. The user sends one message (text,
+// photo or file); it is forwarded to the owner, who answers from the
+// reply button on the forwarded message's info line. ---
+async function handlePendingSupport(chatId, message, userId, from) {
+  if (!(await getSetting(`pending_support:${userId}`))) return false;
+  // A command cancels support mode instead of being forwarded.
+  if ((message.text || '').trim().startsWith('/')) return false;
+  await deleteSetting(`pending_support:${userId}`);
+  if (!OWNER_TELEGRAM_ID) {
+    await showPrivate(chatId, userId, errorView('پشتیبانی هنوز تنظیم نشده است.'));
+    return true;
+  }
+  const who = from.username
+    ? '@' + from.username
+    : [from.first_name, from.last_name].filter(Boolean).join(' ') || `کاربر ${userId}`;
+  let forwarded = false;
+  try {
+    await api.forwardMessage({
+      chat_id: OWNER_TELEGRAM_ID,
+      from_chat_id: chatId,
+      message_id: message.message_id,
+    });
+    forwarded = true;
+  } catch {
+    // Forwarding can fail (privacy settings); fall back to a summary.
+  }
+  if (!forwarded) {
+    const body = (message.text || '').trim() || '(فایل یا عکس — فوروارد نشد)';
+    try {
+      await api.sendMessage({
+        chat_id: OWNER_TELEGRAM_ID,
+        text: `💬 پیام پشتیبانی از ${who} (آیدی: ${userId}):\n${body}`,
+      });
+    } catch {
+      // The owner is unreachable; the user still gets an answer below.
+    }
+  }
+  try {
+    await api.sendMessage({
+      chat_id: OWNER_TELEGRAM_ID,
+      text: `💬 پیام پشتیبانی\nاز: ${who} (آیدی: ${userId})\nبرای پاسخ، دکمه زیر را بزن.`,
+      reply_markup: supportReplyKeyboard(userId),
+    });
+  } catch {
+    // The owner is unreachable; the user still gets an answer below.
+  }
+  await deleteMessageBestEffort(chatId, message.message_id);
+  await showPrivate(chatId, userId, {
+    text: 'پیامت به پشتیبانی فرستاده شد ✅\nبه‌زودی جوابت را می‌دهم.',
+    reply_markup: backToMenu(),
+  });
+  return true;
+}
+
+// --- Private chat (owner): answering a support message. The owner's
+// message is forwarded to the user as-is (text, photo or file). ---
+async function handlePendingSupportReply(chatId, message, ownerId) {
+  const raw = await getSetting(`pending_support_reply:${ownerId}`);
+  if (!raw) return false;
+  // A command cancels the reply instead of being forwarded.
+  if ((message.text || '').trim().startsWith('/')) return false;
+  let pending;
+  try {
+    pending = JSON.parse(raw);
+  } catch {
+    await deleteSetting(`pending_support_reply:${ownerId}`);
+    return false;
+  }
+  await deleteSetting(`pending_support_reply:${ownerId}`);
+  const target = Number(pending?.userId) || 0;
+  if (!target) return false;
+  let sent = false;
+  try {
+    await api.forwardMessage({
+      chat_id: target,
+      from_chat_id: chatId,
+      message_id: message.message_id,
+    });
+    sent = true;
+  } catch {
+    // Forwarding can fail; fall back to plain text when there is any.
+  }
+  if (!sent && (message.text || '').trim()) {
+    try {
+      await api.sendMessage({ chat_id: target, text: (message.text || '').trim() });
+      sent = true;
+    } catch {
+      sent = false;
+    }
+  }
+  if (sent) {
+    await showPrivate(chatId, ownerId, { text: 'پاسخ ارسال شد ✅', reply_markup: backToMenu() });
+  } else {
+    await showPrivate(chatId, ownerId, errorView('ارسال پاسخ ممکن نشد — شاید کاربر بات را بلاک کرده است.'));
+  }
+  return true;
+}
+
+// --- Private chat (owner): manual wallet balance fix. The owner
+// types the NEW balance; the change is written to the ledger as a
+// manual adjustment (kind 'adjust') so the money history stays
+// auditable. ---
+async function handlePendingBalance(chatId, messageId, ownerId, text) {
+  const raw = await getSetting(`pending_balance:${ownerId}`);
+  if (!raw) return false;
+  let pending;
+  try {
+    pending = JSON.parse(raw);
+  } catch {
+    await deleteSetting(`pending_balance:${ownerId}`);
+    return false;
+  }
+  const target = Number(pending?.userId) || 0;
+  const user = target ? await getUser(target) : null;
+  if (!user) {
+    await deleteSetting(`pending_balance:${ownerId}`);
+    await showPrivate(chatId, ownerId, errorView('کاربر پیدا نشد.'));
+    await deleteMessageBestEffort(chatId, messageId);
+    return true;
+  }
+  const amount = parseAmount(text, true);
+  if (amount === null) {
+    await showPrivate(chatId, ownerId, balancePromptView(user, 'مبلغ درست نیست. یک عدد به تومان بفرستید.'));
+    await deleteMessageBestEffort(chatId, messageId);
+    return true;
+  }
+  const oldBalance = Number(user.balance) || 0;
+  await deleteSetting(`pending_balance:${ownerId}`);
+  const next = await setUserBalance(target, amount);
+  const delta = next - oldBalance;
+  if (delta !== 0) {
+    await insertTransaction({
+      userId: target,
+      username: user.username || null,
+      kind: 'adjust',
+      amount: delta,
+      status: 'approved',
+    });
+  }
+  const history = await getUserDownloads(target);
+  const updated = await getUser(target);
+  await showPrivate(chatId, ownerId, statsUserView(updated, history));
   await deleteMessageBestEffort(chatId, messageId);
   return true;
 }
@@ -792,6 +966,13 @@ export default async function (message, ctx) {
   const messageId = message.message_id;
   const text = (message.text || '').trim();
   try {
+    // Sweep self-deleting messages whose time has come. Serverless
+    // has no timer, so this runs on every incoming update.
+    try {
+      await runCleanup();
+    } catch {
+      // Cleanup never breaks handling.
+    }
     // The DB group is owner-only: everyone else is ignored there.
     if (isDbGroup(chatId)) {
       if (!isOwner(userId)) return;
@@ -820,10 +1001,7 @@ export default async function (message, ctx) {
       if (text.startsWith('/')) {
         const handled = await handleReceiptsGroupCommand(chatId, messageId, userId, text);
         if (handled !== false) return;
-        await api.sendMessage({
-          chat_id: chatId,
-          text: 'این دستور را نمی‌شناسم. /id یا /rx <شماره پیام> ok|no',
-        });
+        await sendExpiring(chatId, 'این دستور را نمی‌شناسم. /id یا /rx <شماره پیام> ok|no');
         return;
       }
       return;
@@ -834,6 +1012,13 @@ export default async function (message, ctx) {
 
     // Private chat.
     await trackUser(from, null);
+
+    // Support: one message (text, photo or file) forwarded to the
+    // owner. Runs before the receipt-photo intake so a support photo
+    // is not mistaken for a receipt.
+    if (await handlePendingSupport(chatId, message, userId, from)) return;
+    // Owner answering a support message.
+    if (isOwner(userId) && (await handlePendingSupportReply(chatId, message, userId))) return;
 
     // Receipt photo for a pending top-up (before anything else: a
     // photo is not a command and not a file to download).
@@ -924,7 +1109,18 @@ export default async function (message, ctx) {
         return;
       }
       if (command === '/id') {
-        await showPrivate(chatId, userId, { text: `آیدی این چت: ${chatId}\nآیدی شما: ${userId}` });
+        // One-off, never a screen: /id must not eat the menu, and the
+        // reply deletes itself after 20 seconds.
+        await sendExpiring(
+          chatId,
+          `آیدی این چت: ${chatId}\nآیدی شما: ${userId}\n(این پیام بعد از ۲۰ ثانیه پاک می‌شود.)`,
+        );
+        return;
+      }
+      if (command === '/support') {
+        if (!(await ensureMember(chatId, userId))) return;
+        await setSetting(`pending_support:${userId}`, '1');
+        await showPrivate(chatId, userId, supportPromptView());
         return;
       }
       if (command === '/help') {
@@ -939,6 +1135,7 @@ export default async function (message, ctx) {
     if (await handlePendingUserSearch(chatId, messageId, userId, text)) return;
     if (await handlePendingBroadcast(chatId, messageId, userId, text)) return;
     if (await handlePendingNotifyUser(chatId, messageId, userId, text)) return;
+    if (await handlePendingBalance(chatId, messageId, userId, text)) return;
     // A bare id (F001) opens that file.
     const bare = normalizeDigits(text);
     if (/^F\d{1,6}$/i.test(bare)) {

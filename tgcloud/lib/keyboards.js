@@ -25,8 +25,9 @@ function pagerRow(rows, page, totalPages, prefix) {
   return rows;
 }
 
-// Main menu. The owner also gets the stats button. The wallet balance
-// is always visible here.
+// Main menu. The owner also gets the stats and notify buttons. The
+// wallet balance is always visible here. Everyone gets the support
+// button.
 export function mainMenu(owner, balance) {
   const rows = [
     [
@@ -38,8 +39,12 @@ export function mainMenu(owner, balance) {
       { text: '🔍 جستجو', callback_data: 'm:search' },
     ],
     [{ text: `💰 کیف پول: ${formatToman(balance || 0)}`, callback_data: 'w:home' }],
+    [{ text: '💬 پیام به پشتیبانی', callback_data: 'm:support' }],
   ];
-  if (owner) rows.push([{ text: '📊 آمار من', callback_data: 'm:stats' }]);
+  if (owner) {
+    rows.push([{ text: '📊 آمار من', callback_data: 'm:stats' }]);
+    rows.push([{ text: '📣 اطلاع‌رسانی', callback_data: 'm:notify' }]);
+  }
   rows.push([{ text: 'راهنما', callback_data: 'm:help' }]);
   return { inline_keyboard: rows };
 }
@@ -180,7 +185,8 @@ export function socialsKeyboard(socials) {
   return { inline_keyboard: navRows(rows, null) };
 }
 
-// Owner stats home: users, files, user search, transactions, notify.
+// Owner stats home: users, files, user search, transactions, notify,
+// database.
 export function statsKeyboard() {
   return {
     inline_keyboard: [
@@ -193,6 +199,66 @@ export function statsKeyboard() {
         { text: '🧾 تراکنش‌ها', callback_data: 'st:tx:0' },
       ],
       [{ text: '📣 اطلاع‌رسانی به همه', callback_data: 'st:notify' }],
+      [{ text: '🗄️ مدیریت دیتابیس', callback_data: 'st:db' }],
+      [{ text: '🏠 منوی اصلی', callback_data: 'm:home' }],
+    ],
+  };
+}
+
+// Notify audience picker: everyone, one file's downloaders (a bulk
+// group), or one user.
+export function notifyAudienceKeyboard() {
+  return {
+    inline_keyboard: [
+      [{ text: '📣 همه کاربران', callback_data: 'nf:all' }],
+      [{ text: '👥 کاربران یک فایل', callback_data: 'nf:file' }],
+      [{ text: '👤 یک کاربر', callback_data: 'nf:user' }],
+      [{ text: '🏠 منوی اصلی', callback_data: 'm:home' }],
+    ],
+  };
+}
+
+// File picker for the "users of one file" audience: one row per file.
+export function notifyFileKeyboard(items, page, totalPages) {
+  const rows = items.map((item) => [
+    {
+      text: `${item.id} — ${(item.title || '(بدون عنوان)').slice(0, 35)}`,
+      callback_data: `nf:fpick:${item.id}`,
+    },
+  ]);
+  pagerRow(rows, page, totalPages, 'nf:fpk');
+  return { inline_keyboard: navRows(rows, 'm:notify') };
+}
+
+// Owner user detail: message this user, fix their balance, back to
+// users, home.
+export function userDetailKeyboard(userId) {
+  return {
+    inline_keyboard: [
+      [{ text: '📩 پیام به این کاربر', callback_data: `st:msg:${userId}` }],
+      [{ text: '💰 تغییر موجودی', callback_data: `st:bal:${userId}` }],
+      [{ text: '◀ بازگشت', callback_data: 'st:users:0' }],
+      [{ text: '🏠 منوی اصلی', callback_data: 'm:home' }],
+    ],
+  };
+}
+
+// Support message from a user: the owner's reply button.
+export function supportReplyKeyboard(userId) {
+  return {
+    inline_keyboard: [[{ text: '✏️ پاسخ', callback_data: `sp:rep:${userId}` }]],
+  };
+}
+
+// Database management: backup download, clear download history,
+// clear the GitHub cache.
+export function dbKeyboard() {
+  return {
+    inline_keyboard: [
+      [{ text: '💾 دانلود پشتیبان (JSON)', callback_data: 'st:backup' }],
+      [{ text: '🗑 پاک کردن تاریخچه دانلودها', callback_data: 'st:cleardl' }],
+      [{ text: '🗑 پاک کردن کش گیت‌هاب', callback_data: 'st:clearcache' }],
+      [{ text: '◀ بازگشت', callback_data: 'm:stats' }],
       [{ text: '🏠 منوی اصلی', callback_data: 'm:home' }],
     ],
   };
@@ -220,17 +286,6 @@ export function userSearchKeyboard(items, page, totalPages) {
   ]);
   pagerRow(rows, page, totalPages, 'st:ures');
   return { inline_keyboard: navRows(rows, 'm:stats') };
-}
-
-// Owner user detail: message this user, back to users, home.
-export function userDetailKeyboard(userId) {
-  return {
-    inline_keyboard: [
-      [{ text: '📩 پیام به این کاربر', callback_data: `st:msg:${userId}` }],
-      [{ text: '◀ بازگشت', callback_data: 'st:users:0' }],
-      [{ text: '🏠 منوی اصلی', callback_data: 'm:home' }],
-    ],
-  };
 }
 
 // Stats file list page: one row per file (taps show the same file view

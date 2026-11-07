@@ -6,9 +6,9 @@
 import { api, db } from 'sdk';
 import { eq } from 'sdk/db';
 import { CHANNEL_ID, GROUP_ID, DB_GROUP_ID, RECEIPTS_GROUP_ID } from './config.js';
-import { isMemberStatus, searchFiles, searchUsers, aggregateDownloads, countNewUsers, isPremiumFile, canAfford, formatToman } from './pure.js';
+import { isMemberStatus, searchFiles, searchUsers, aggregateDownloads, countNewUsers, isPremiumFile, canAfford, formatToman, FILE_TTL_SEC, NOTICE_TTL_SEC, expiredRows, fileDownloaders } from './pure.js';
 import { files, file_parts, downloads, users } from '../schema.js';
-import { listFiles, getAllParts, listDownloads, listUsers, getFile, getParts, getVersions, recordDownload, getUser, getUserBalance, adjustUserBalance, insertTransaction, listTransactions, getPendingReceipts, getSetting, deleteSetting, updateTransactionStatus } from './store.js';
+import { listFiles, getAllParts, listDownloads, listUsers, getFile, getParts, getVersions, recordDownload, getUser, getUserBalance, adjustUserBalance, insertTransaction, listTransactions, getPendingReceipts, getSetting, deleteSetting, updateTransactionStatus, recordExpiringMessage, listExpiringMessages, deleteExpiringMessages } from './store.js';
 
 // Check force-join membership for a user. Returns
 // { channel: true|false|null, group: true|false|null } — null means
@@ -50,6 +50,52 @@ export function isReceiptsGroup(chatId) {
   return !!RECEIPTS_GROUP_ID && Number(chatId) === Number(RECEIPTS_GROUP_ID);
 }
 
+// --- Self-deleting messages ---
+// Telegram Serverless has no timer or cron, so expiry is enforced
+// lazily: run this on every incoming update. It deletes every
+// recorded message whose time has come (best-effort — a message the
+// reader already deleted, or one Telegram refuses, is simply
+// forgotten) and drops the rows either way. Returns how many rows
+// were swept.
+export async function runCleanup() {
+  let rows;
+  try {
+    rows = expiredRows(await listExpiringMessages(), Date.now());
+  } catch {
+    return 0;
+  }
+  if (rows.length === 0) return 0;
+  for (const r of rows) {
+    try {
+      await api.deleteMessage({ chat_id: r.chat_id, message_id: r.message_id });
+    } catch {
+      // Already gone, or Telegram refuses — forget the row anyway.
+    }
+  }
+  try {
+    await deleteExpiringMessages(rows.map((r) => r.id));
+  } catch {
+    // Rows left behind are swept on the next update.
+  }
+  return rows.length;
+}
+
+// Send a one-off notice that deletes itself after `seconds`
+// (default 20s). The screen is never touched — this is for messages
+// that are not navigation. Returns the sent message.
+export async function sendExpiring(chatId, text, seconds = NOTICE_TTL_SEC, extra = {}) {
+  const sent = await api.sendMessage({ chat_id: chatId, text, ...extra });
+  const id = sent?.message_id ?? null;
+  if (id) {
+    try {
+      await recordExpiringMessage(chatId, id, seconds, 'notice');
+    } catch {
+      // The notice stays; cleanup is best-effort.
+    }
+  }
+  return sent;
+}
+
 // File view model shared by both handlers: file row + version
 // snapshot (title/description of that version) + its parts + all
 // versions for the version buttons. Returns null when missing.
@@ -80,27 +126,40 @@ export async function countDownloads(fileId, version) {
 // Deliver one file version: each part as its own message, with its
 // ORIGINAL file name (the file_id already carries it — nothing is
 // renamed). The first part removes the reply keyboard (used for the
-// phone prompt). Returns { ok } or { error }.
+// phone prompt). Every part deletes itself 60 seconds after delivery,
+// so the chat does not stay cluttered — the reader is told so in the
+// caption. Returns { ok } or { error }.
 export async function deliverParts(chatId, file, version, parts, user, removeKeyboard) {
   if (!parts || parts.length === 0) {
     return { error: 'این فایل پارتی ندارد.' };
   }
   const title = file.title || '(بدون عنوان)';
   for (const [i, p] of parts.entries()) {
-    const caption = `پارت ${i + 1} از ${parts.length} — ${title} v${version}`;
+    const caption =
+      `پارت ${i + 1} از ${parts.length} — ${title} v${version}\n` +
+      '⏳ این پیام بعد از ۱ دقیقه پاک می‌شود.';
     const replyMarkup =
       removeKeyboard && i === 0 ? { remove_keyboard: true } : undefined;
     try {
+      let sent = null;
       if (p.kind === 'photo' || file.kind === 'photo') {
-        await api.sendPhoto({ chat_id: chatId, photo: p.tg_file_id, caption, ...(replyMarkup ? { reply_markup: replyMarkup } : {}) });
+        sent = await api.sendPhoto({ chat_id: chatId, photo: p.tg_file_id, caption, ...(replyMarkup ? { reply_markup: replyMarkup } : {}) });
       } else if (p.kind === 'video') {
-        await api.sendVideo({ chat_id: chatId, video: p.tg_file_id, caption, ...(replyMarkup ? { reply_markup: replyMarkup } : {}) });
+        sent = await api.sendVideo({ chat_id: chatId, video: p.tg_file_id, caption, ...(replyMarkup ? { reply_markup: replyMarkup } : {}) });
       } else if (p.kind === 'audio') {
-        await api.sendAudio({ chat_id: chatId, audio: p.tg_file_id, caption, ...(replyMarkup ? { reply_markup: replyMarkup } : {}) });
+        sent = await api.sendAudio({ chat_id: chatId, audio: p.tg_file_id, caption, ...(replyMarkup ? { reply_markup: replyMarkup } : {}) });
       } else if (p.kind === 'voice') {
-        await api.sendVoice({ chat_id: chatId, voice: p.tg_file_id, caption, ...(replyMarkup ? { reply_markup: replyMarkup } : {}) });
+        sent = await api.sendVoice({ chat_id: chatId, voice: p.tg_file_id, caption, ...(replyMarkup ? { reply_markup: replyMarkup } : {}) });
       } else {
-        await api.sendDocument({ chat_id: chatId, document: p.tg_file_id, caption, ...(replyMarkup ? { reply_markup: replyMarkup } : {}) });
+        sent = await api.sendDocument({ chat_id: chatId, document: p.tg_file_id, caption, ...(replyMarkup ? { reply_markup: replyMarkup } : {}) });
+      }
+      const id = sent?.message_id ?? null;
+      if (id) {
+        try {
+          await recordExpiringMessage(chatId, id, FILE_TTL_SEC, 'file');
+        } catch {
+          // The file stays; cleanup is best-effort.
+        }
       }
     } catch (err) {
       return { error: 'ارسال فایل ممکن نشد: ' + (err?.description || err?.message || 'نامشخص') };
@@ -239,10 +298,10 @@ export async function settleReceipt(tx, approve) {
     await updateTransactionStatus(tx.id, 'approved');
     const balance = await adjustUserBalance(userId, Number(tx.amount) || 0);
     try {
-      await api.sendMessage({
-        chat_id: userId,
-        text: `کیف پولت ${formatToman(tx.amount)} شارژ شد ✅\nموجودی: ${formatToman(balance)}`,
-      });
+      await sendExpiring(
+        userId,
+        `کیف پولت ${formatToman(tx.amount)} شارژ شد ✅\nموجودی: ${formatToman(balance)}`,
+      );
     } catch {
       // The user may have blocked the bot; the money is still credited.
     }
@@ -262,17 +321,17 @@ export async function settleReceipt(tx, approve) {
                 delivered = true;
                 await deleteSetting(`pending_purchase:${userId}`);
                 try {
-                  await api.sendMessage({ chat_id: userId, text: 'فایل برات ارسال شد ✅' });
+                  await sendExpiring(userId, 'فایل برات ارسال شد ✅');
                 } catch {
                   // Best-effort notice.
                 }
               }
             } else if (bought.error === 'insufficient') {
               try {
-                await api.sendMessage({
-                  chat_id: userId,
-                  text: `شارژ شد، ولی برای این فایل هنوز ${formatToman(bought.missing)} کم داری.`,
-                });
+                await sendExpiring(
+                  userId,
+                  `شارژ شد، ولی برای این فایل هنوز ${formatToman(bought.missing)} کم داری.`,
+                );
               } catch {
                 // Best-effort notice.
               }
@@ -287,12 +346,31 @@ export async function settleReceipt(tx, approve) {
   }
   await updateTransactionStatus(tx.id, 'rejected');
   try {
-    await api.sendMessage({
-      chat_id: userId,
-      text: 'رسیدت تایید نشد. اگر اشتباهی شده، دوباره بفرست.',
-    });
+    await sendExpiring(userId, 'رسیدت تایید نشد. اگر اشتباهی شده، دوباره بفرست.');
   } catch {
     // Best-effort notice.
   }
   return { status: 'rejected' };
+}
+
+// Users who downloaded a file (any version), newest download first.
+// Used for the "notify this file's users" audience.
+export async function getFileDownloaders(fileId) {
+  return fileDownloaders(await listDownloads(), fileId);
+}
+
+// Send a notification to a list of user ids. One failure (blocked
+// bot, deleted account) never stops the rest. Returns { ok, fail }.
+export async function sendNotifyToUsers(userIds, text) {
+  let ok = 0;
+  let fail = 0;
+  for (const id of Array.isArray(userIds) ? userIds : []) {
+    try {
+      await api.sendMessage({ chat_id: id, text });
+      ok += 1;
+    } catch {
+      fail += 1;
+    }
+  }
+  return { ok, fail };
 }

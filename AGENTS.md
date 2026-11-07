@@ -1,4 +1,4 @@
-# AGENTS.md — ErffanHub Files v2 (v2.0.0)
+# AGENTS.md — ErffanHub Files v2 (v2.1.0)
 
 ## Layout
 
@@ -28,9 +28,19 @@
   for private chat, `screen_db:<ownerId>` for the DB group). The
   user's own command/text messages are deleted after handling
   (best-effort; Telegram forbids deleting messages older than 48h).
-  Delivered files are new messages and stay. Receipts-group messages
-  are records and are never auto-deleted — except rejected receipts,
-  which are deleted when the owner rejects them.
+  Receipts-group messages are records and are never auto-deleted —
+  except rejected receipts, which are deleted when the owner rejects
+  them.
+- Self-deleting messages (v2.1): delivered files delete themselves
+  60s after delivery (`FILE_TTL_SEC`), one-off notices 20s after
+  (`NOTICE_TTL_SEC`). Telegram Serverless has NO timer or cron and
+  endpoints are Mini-App-only, so expiry is enforced lazily: both
+  handlers call `runCleanup()` on every incoming update, which
+  deletes the due rows of the `expiring_messages` table (best-effort)
+  and drops the rows either way. `/id` is a one-off expiring message,
+  never a screen — it used to replace the screen (eating the menu)
+  and stay forever. The file caption tells the reader it will be
+  deleted in 1 minute.
 - Buttons: every screen ends the same way — content rows, pager row
   when paging, a generic «◀ بازگشت» row, then «🏠 منوی اصلی». The
   back button is always generic, never named after the previous
@@ -88,10 +98,33 @@
   who shared once is never asked again. The phone is stored in
   `users.phone` and shown ONLY in the owner-only `/stats`. The bot
   never requests location and never asks for any other personal info.
-- Owner notify (v2): `/stats` has «📣 اطلاع‌رسانی به همه» (type the
-  text, confirm the user count, the bot sends it to every user) and,
-  on each user profile, «📩 پیام به این کاربر». User search in
-  `/stats` («🔍 جستجوی کاربر») matches name, username or id.
+- Owner notify (v2.1): «📣 اطلاع‌رسانی» on the main menu (owner
+  only) opens an audience picker — everyone, one file's downloaders
+  (`getFileDownloaders`, bulk), or one user (search, then message).
+  The `/stats` entry («📣 اطلاع‌رسانی به همه») still works and
+  returns to stats; the return target rides in
+  `pending_notify_return`. On each user profile, «📩 پیام به این
+  کاربر». User search in `/stats` («🔍 جستجوی کاربر») matches name,
+  username or id.
+- Support (v2.1): «💬 پیام به پشتیبانی» in the main menu (and
+  `/support`) sets `pending_support`; the user's next message (text,
+  photo or file) is forwarded to the owner (`api.forwardMessage`,
+  text fallback when forwarding fails) with an info line carrying a
+  «✏️ پاسخ» button (`sp:rep:<userId>`). The owner's reply
+  (`pending_support_reply`) is forwarded back to the user. A command
+  cancels support/reply mode instead of being forwarded.
+- Manual balance fix (v2.1): on a user profile, «💰 تغییر موجودی»
+  (`st:bal:<userId>`) asks for the NEW balance; `setUserBalance`
+  clamps at zero and the signed delta is recorded in
+  `wallet_transactions` as kind 'adjust' (shown as «تغییر دستی»).
+- Database management (v2.1): «🗄️ مدیریت دیتابیس» in `/stats`
+  shows row counts for all 9 tables (`getDbCounts`), «💾 دانلود
+  پشتیبان (JSON)» sends a full dump as a file (JSON built in memory,
+  `new InputFile(bytes, name, { type: 'application/json' })` —
+  no filesystem on Serverless), and confirm-guarded clears for
+  download history (`clearDownloads`) and the GitHub cache
+  (`clearGithubCache`). Files, users, balances and the money ledger
+  are never wiped from here.
 - Versions: a file row holds the latest version; old versions stay in
   `file_versions` + `file_parts` and are retrievable; latest is the
   default. `/update` keeps the id; «همون» keeps the old description.
@@ -99,11 +132,12 @@
   in `github_cache`. A failed fetch shows the cached list with its
   date; the bot never fails `/start` because of GitHub.
 - Persian RTL UI. Clean code, no emoji/banner decoration in code, no
-  TODOs, no dead code. Schema: 8 tables (settings, files,
+  TODOs, no dead code. Schema: 9 tables (settings, files,
   file_parts, file_versions, downloads, users, github_cache,
-  wallet_transactions), no foreign keys. `files` has `category` and
-  `price` columns; `users` has nullable `phone` and `balance`
-  columns. Do not change `tgcloud/schema.js` without a migration plan.
+  wallet_transactions, expiring_messages), no foreign keys. `files`
+  has `category` and `price` columns; `users` has nullable `phone`
+  and `balance` columns. Do not change `tgcloud/schema.js` without a
+  migration plan.
 - Pending owner/user input lives in `settings` keys (`pending_*`),
   same pattern as the erffanhub-bot builds.
 
