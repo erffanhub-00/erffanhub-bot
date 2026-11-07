@@ -1,6 +1,0 @@
-# Copy to .dev.vars for local development: `cp .dev.vars.example .dev.vars`
-# Never commit .dev.vars. Values here are placeholders, not real secrets.
-BOT_TOKEN=
-WEBHOOK_SECRET=
-OWNER_TELEGRAM_ID=
-STORAGE_GROUP_ID=
