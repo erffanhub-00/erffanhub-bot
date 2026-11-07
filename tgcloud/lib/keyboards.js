@@ -32,31 +32,41 @@ function pagerRow(rows, page, totalPages, prefix) {
   return rows;
 }
 
-// Main menu. The owner also gets the stats and notify buttons. The
-// wallet balance is always visible here. Everyone gets the support
-// button.
-export function mainMenu(owner, balance) {
+// Main menu (v2.4): a PERSISTENT REPLY keyboard, not an inline
+// keyboard. It belongs to the chat, not to any message, so it stays
+// visible even after every message is deleted (delivered files
+// self-delete after 60s) — the user never faces an empty chat with
+// no way back except /start. `is_persistent` asks clients to keep
+// it shown. Button taps arrive as plain text; message.js routes
+// them by these exact labels — MENU_LABELS is the single source
+// of truth, used here and in the handler.
+export const MENU_LABELS = {
+  files: '📁 فایل‌ها',
+  search: '🔍 جستجو',
+  wallet: '💰 کیف پول',
+  support: '💬 پیام به پشتیبانی',
+  projects: '📦 پروژه‌های گیت‌هاب',
+  socials: '🔗 شبکه‌های اجتماعی',
+  stats: '📊 آمار من',
+  notify: '📣 اطلاع‌رسانی',
+  home: '🏠 منوی اصلی',
+  help: '❓ راهنما',
+};
+
+export function persistentKeyboard(owner) {
   const rows = [
-    [
-      { text: '📦 پروژه‌های گیت‌هاب', callback_data: 'm:projects' },
-      { text: '🔗 شبکه‌های اجتماعی', callback_data: 'm:socials' },
-    ],
-    [
-      { text: '📁 فایل‌ها', callback_data: 'm:files' },
-      { text: '🔍 جستجو', callback_data: 'm:search' },
-    ],
-    [{ text: `💰 کیف پول: ${formatToman(balance || 0)}`, callback_data: 'w:home' }],
-    [{ text: '💬 پیام به پشتیبانی', callback_data: 'm:support' }],
+    [{ text: MENU_LABELS.files }, { text: MENU_LABELS.search }],
+    [{ text: MENU_LABELS.wallet }, { text: MENU_LABELS.support }],
+    [{ text: MENU_LABELS.projects }, { text: MENU_LABELS.socials }],
   ];
   if (owner) {
-    rows.push([{ text: '📊 آمار من', callback_data: 'm:stats' }]);
-    rows.push([{ text: '📣 اطلاع‌رسانی', callback_data: 'm:notify' }]);
+    rows.push([{ text: MENU_LABELS.stats }, { text: MENU_LABELS.notify }]);
     if (DASHBOARD_URL) {
       rows.push([{ text: '🖥️ داشبورد مدیریت', web_app: { url: DASHBOARD_URL } }]);
     }
   }
-  rows.push([{ text: 'راهنما', callback_data: 'm:help' }]);
-  return { inline_keyboard: rows };
+  rows.push([{ text: MENU_LABELS.home }, { text: MENU_LABELS.help }]);
+  return { keyboard: rows, resize_keyboard: true, is_persistent: true };
 }
 
 export function backToMenu() {

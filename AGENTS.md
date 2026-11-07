@@ -1,4 +1,4 @@
-# AGENTS.md — ErffanHub Files v2 (v2.3.2)
+# AGENTS.md — ErffanHub Files v2 (v2.4.0)
 
 ## Layout
 
@@ -75,6 +75,16 @@
   back button is always generic, never named after the previous
   screen. DB-group screens have no main-menu row; their back button
   (`db:cls`) just closes the screen.
+- Persistent menu (v2.4): the main menu is a REPLY keyboard
+  (`persistentKeyboard` in `lib/keyboards.js`, `is_persistent`),
+  not an inline keyboard — it belongs to the chat, so it stays
+  visible even after every message is deleted and the user never
+  faces an empty chat with no way back except /start. Its button
+  labels live once in `MENU_LABELS`; `handleMenuButton` in
+  `handlers/message.js` routes the plain-text taps (before every
+  text intake, like /commands) and re-checks force-join. After a
+  phone-prompt download the main menu is shown again to restore
+  the keyboard (the one-time contact keyboard hides it).
 - Pagination is 5 per page everywhere, including the DB-group `/list`
   (its pager buttons work now — the callback handler routes file
   browsing actions inside the DB group too).

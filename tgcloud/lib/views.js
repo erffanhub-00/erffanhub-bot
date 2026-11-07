@@ -7,7 +7,7 @@
 import { paginate } from './pure.js';
 import { truncate, formatTehran, formatFile, fileLine, formatBytes, formatToman } from './format.js';
 import {
-  mainMenu,
+  persistentKeyboard,
   backToMenu,
   joinKeyboard,
   filesKeyboard,
@@ -48,6 +48,7 @@ export const HELP_TEXT =
   '/wallet — کیف پول و شارژ\n' +
   '/support — پیام به پشتیبانی\n' +
   '/help — همین راهنما\n\n' +
+  'منوی پایین چت (فایل‌ها، جستجو، کیف پول و…) همیشه در دسترس است و نیازی به /start نیست.\n\n' +
   'برای استفاده از بات اول باید عضو کانال و گروه شوید.\n' +
   'فایل‌ها را با شناسه‌شان (مثل F001) یا از لیست فایل‌ها پیدا کنید.\n' +
   'فایل‌های پرمیوم (💰) با کیف پول خریده می‌شوند: کیف پول را با کارت‌به‌کارت شارژ کنید.\n' +
@@ -58,8 +59,8 @@ export function mainMenuView(owner, totalFiles, balance = 0) {
     'به کتابخانه فایل‌های عرفان خوش آمدید.\n\n' +
     `فایل‌ها: ${totalFiles} مورد\n` +
     `💰 کیف پول: ${formatToman(balance)}\n` +
-    'پروژه‌های گیت‌هاب، شبکه‌های اجتماعی و فایل‌ها از منوی زیر.';
-  return { text, reply_markup: mainMenu(owner, balance) };
+    'منوی پایین چت همیشه در دسترس است — برای برگشت به اینجا «🏠 منوی اصلی» را بزنید.';
+  return { text, reply_markup: persistentKeyboard(owner) };
 }
 
 export function helpView() {

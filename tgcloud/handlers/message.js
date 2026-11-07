@@ -72,7 +72,7 @@ import {
   getFileDownloaders,
 } from '../lib/library.js';
 import { getProjects } from '../lib/github.js';
-import { receiptKeyboard, backToMenu, supportReplyKeyboard } from '../lib/keyboards.js';
+import { receiptKeyboard, backToMenu, supportReplyKeyboard, MENU_LABELS } from '../lib/keyboards.js';
 import {
   HELP_TEXT,
   mainMenuView,
@@ -630,7 +630,92 @@ async function deliverPending(chatId, userId, from) {
     }
   }
   const res = await deliverParts(chatId, model.view, model.view.version, model.parts, from, true);
-  if (res.error) await showPrivate(chatId, userId, errorView(res.error));
+  if (res.error) {
+    await showPrivate(chatId, userId, errorView(res.error));
+  } else {
+    // The phone prompt used a one-time reply keyboard, which hides
+    // the persistent menu — show the main menu to bring it back,
+    // so the chat never ends on a lone self-deleting file.
+    await showPrivate(
+      chatId,
+      userId,
+      mainMenuView(isOwner(userId), (await listFiles()).length, await getUserBalance(userId)),
+    );
+  }
+  return true;
+}
+
+// --- Private chat: persistent-menu buttons. The reply keyboard
+// (see lib/keyboards.js persistentKeyboard) sends plain text, so
+// these taps arrive as messages. They run before every text intake
+// (like /commands, they cancel a pending input) and before the
+// support/reply flows, so tapping a menu button is never forwarded
+// to the owner as a support message or swallowed as a search query.
+// Every action re-checks force-join, exactly like its /command twin.
+async function handleMenuButton(chatId, messageId, userId, text) {
+  const L = MENU_LABELS;
+  const isMenuButton =
+    text === L.files || text === L.search || text === L.wallet ||
+    text === L.support || text === L.projects || text === L.socials ||
+    text === L.stats || text === L.notify || text === L.home || text === L.help;
+  if (!isMenuButton) return false;
+  await clearUserPending(userId);
+  await deleteMessageBestEffort(chatId, messageId);
+  if (text === L.help) {
+    await showPrivate(chatId, userId, helpView());
+    return true;
+  }
+  if (!(await ensureMember(chatId, userId))) return true;
+  if (text === L.home) {
+    const all = await listFiles();
+    await showPrivate(chatId, userId, mainMenuView(isOwner(userId), all.length, await getUserBalance(userId)));
+    return true;
+  }
+  if (text === L.files) {
+    const all = await listFiles();
+    await showPrivate(chatId, userId, categoriesView(await listCategories(), all.length));
+    return true;
+  }
+  if (text === L.search) {
+    await showPrivate(chatId, userId, searchPromptView());
+    await setSetting(`pending_search:${userId}`, '1');
+    return true;
+  }
+  if (text === L.wallet) {
+    await showPrivate(chatId, userId, walletView(await getUserBalance(userId), await listUserTransactions(userId)));
+    return true;
+  }
+  if (text === L.support) {
+    await setSetting(`pending_support:${userId}`, '1');
+    await showPrivate(chatId, userId, supportPromptView());
+    return true;
+  }
+  if (text === L.projects) {
+    await showPrivate(chatId, userId, { text: 'در حال گرفتن پروژه‌ها…' });
+    const res = await getProjects(false);
+    await showPrivate(chatId, userId, projectsView(res.repos, res.cachedAt, res.liveFailed));
+    return true;
+  }
+  if (text === L.socials) {
+    await showPrivate(chatId, userId, socialsView(SOCIALS));
+    return true;
+  }
+  if (text === L.stats) {
+    if (!isOwner(userId)) {
+      await showPrivate(chatId, userId, errorView('این بخش فقط برای صاحب بات است.'));
+      return true;
+    }
+    await showStats(chatId, userId);
+    return true;
+  }
+  if (text === L.notify) {
+    if (!isOwner(userId)) {
+      await showPrivate(chatId, userId, errorView('این بخش فقط برای صاحب بات است.'));
+      return true;
+    }
+    await showPrivate(chatId, userId, notifyAudienceView());
+    return true;
+  }
   return true;
 }
 
@@ -1009,6 +1094,11 @@ export default async function (message, ctx) {
 
     // Private chat.
     await trackUser(from, null);
+
+    // Persistent-menu buttons (reply keyboard): plain-text taps,
+    // handled before any intake so they are never mistaken for
+    // a search query or a support message.
+    if (await handleMenuButton(chatId, messageId, userId, text)) return;
 
     // Support: one message (text, photo or file) forwarded to the
     // owner. Runs before the receipt-photo intake so a support photo

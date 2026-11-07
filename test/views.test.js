@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { isOwner } from '../tgcloud/lib/auth.js';
-import { mainMenu, joinKeyboard } from '../tgcloud/lib/keyboards.js';
+import { persistentKeyboard, MENU_LABELS, joinKeyboard } from '../tgcloud/lib/keyboards.js';
 import {
   mainMenuView,
   fileView,
@@ -30,10 +30,20 @@ test('owner gate: isOwner refuses everyone while the owner id is unset (0)', () 
 });
 
 test('main menu shows the stats button only to the owner', () => {
-  const ownerKb = mainMenu(true).inline_keyboard.flat();
-  const userKb = mainMenu(false).inline_keyboard.flat();
-  assert.ok(ownerKb.some((b) => b.callback_data === 'm:stats'));
-  assert.ok(!userKb.some((b) => b.callback_data === 'm:stats'));
+  const ownerKb = persistentKeyboard(true).keyboard.flat();
+  const userKb = persistentKeyboard(false).keyboard.flat();
+  assert.ok(ownerKb.some((b) => b.text === MENU_LABELS.stats));
+  assert.ok(!userKb.some((b) => b.text === MENU_LABELS.stats));
+});
+
+test('persistent keyboard carries every menu label for the owner', () => {
+  const buttons = persistentKeyboard(true).keyboard.flat().map((b) => b.text);
+  for (const label of Object.values(MENU_LABELS)) {
+    assert.ok(buttons.includes(label), `missing menu button: ${label}`);
+  }
+  const kb = persistentKeyboard(true);
+  assert.equal(kb.resize_keyboard, true);
+  assert.equal(kb.is_persistent, true);
 });
 
 test('join keyboard offers join links and a membership check button', () => {
@@ -210,8 +220,9 @@ test('main menu view greets and shows the file count', () => {
 test('main menu shows the wallet balance and a wallet button', () => {
   const view = mainMenuView(false, 3, 12000);
   assert.match(view.text, /کیف پول: ۱۲٬۰۰۰ تومان/);
-  const buttons = view.reply_markup.inline_keyboard.flat();
-  assert.ok(buttons.some((b) => b.callback_data === 'w:home'));
+  const buttons = view.reply_markup.keyboard.flat();
+  assert.ok(buttons.some((b) => b.text === MENU_LABELS.wallet));
+  assert.equal(view.reply_markup.is_persistent, true);
 });
 
 test('file view shows the premium price and the price on the download button', () => {
@@ -296,17 +307,17 @@ test('user search results list matches with paging and a back button', () => {
 });
 
 test('main menu shows the notify button only to the owner, and support to everyone', () => {
-  const ownerKb = mainMenu(true).inline_keyboard.flat();
-  const userKb = mainMenu(false).inline_keyboard.flat();
-  assert.ok(ownerKb.some((b) => b.callback_data === 'm:notify'));
-  assert.ok(!userKb.some((b) => b.callback_data === 'm:notify'));
-  assert.ok(ownerKb.some((b) => b.callback_data === 'm:support'));
-  assert.ok(userKb.some((b) => b.callback_data === 'm:support'));
+  const ownerKb = persistentKeyboard(true).keyboard.flat();
+  const userKb = persistentKeyboard(false).keyboard.flat();
+  assert.ok(ownerKb.some((b) => b.text === MENU_LABELS.notify));
+  assert.ok(!userKb.some((b) => b.text === MENU_LABELS.notify));
+  assert.ok(ownerKb.some((b) => b.text === MENU_LABELS.support));
+  assert.ok(userKb.some((b) => b.text === MENU_LABELS.support));
 });
 
 test('main menu shows the dashboard web-app button only to the owner', () => {
-  const ownerKb = mainMenu(true).inline_keyboard.flat();
-  const userKb = mainMenu(false).inline_keyboard.flat();
+  const ownerKb = persistentKeyboard(true).keyboard.flat();
+  const userKb = persistentKeyboard(false).keyboard.flat();
   const dash = ownerKb.find((b) => b.text === '🖥️ داشبورد مدیریت');
   assert.ok(dash);
   assert.equal(dash.web_app.url, 'https://app8692409054.tgcloud.ai/');
