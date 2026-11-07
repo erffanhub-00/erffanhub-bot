@@ -1,4 +1,4 @@
-# AGENTS.md — ErffanHub Files v2 (v2.3.0)
+# AGENTS.md — ErffanHub Files v2 (v2.3.1)
 
 ## Layout
 
@@ -172,8 +172,12 @@
   as before. Every dashboard endpoint is owner-only
   (`requireOwner`); the front-end shows a "فقط مالک" panel on
   'forbidden'. Schema: 10 tables. The main menu has an owner-only
-  web_app button («🖥️ داشبورد مدیریت», `DASHBOARD_URL` in config.js
-  — public URL, not a secret).
+  web_app button («🖥️ داشبورد مدیریت», `DASHBOARD_URL` — a public
+  URL kept as a constant in `lib/keyboards.js`, NOT in config.js:
+  v2.3.0 imported it from config.js, the owner's real config.js
+  never had that key, and the deploy failed to compile. Never add a
+  new required export to config.js — the owner's file never receives
+  it from a push).
 - Persian RTL UI. Clean code, no emoji/banner decoration in code, no
   TODOs, no dead code. Schema: 10 tables (settings, files,
   file_parts, file_versions, downloads, users, github_cache,

@@ -3,8 +3,15 @@
 // «◀ بازگشت» row, then «🏠 منوی اصلی». Buttons carry short callback
 // data (64-byte limit).
 
-import { CHANNEL_URL, GROUP_URL, DASHBOARD_URL } from './config.js';
+import { CHANNEL_URL, GROUP_URL } from './config.js';
 import { formatToman } from './pure.js';
+
+// Owner dashboard (Mini App) URL — the app host. Public, not a
+// secret, and deliberately kept here in code, NOT in config.js:
+// the deployed config.js is the owner's own file and never gets new
+// keys from a push, so importing a new key from it broke the whole
+// deploy (v2.3.0 failed to compile: DASHBOARD_URL missing there).
+const DASHBOARD_URL = 'https://app8692409054.tgcloud.ai/';
 
 // Append the standard bottom rows: generic back, then main menu.
 // `backData` null skips the back row (top-level screens). `home`
